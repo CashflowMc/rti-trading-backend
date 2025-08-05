@@ -1,49 +1,34 @@
+// 📁 FILE: rti-trading-backend/server.js
+// Main Express Server with Subscription Management
+
 const express = require('express');
-const mongoose = require('mongoose');
 const cors = require('cors');
-const helmet = require('helmet');
-const rateLimit = require('express-rate-limit');
-const jwt = require('jsonwebtoken');
+const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+const { createServer } = require('http');
 const { Server } = require('socket.io');
-const http = require('http');
-const cron = require('node-cron');
-const axios = require('axios');
 require('dotenv').config();
 
 const app = express();
-const server = http.createServer(app);
+const server = createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: process.env.FRONTEND_URL || "*",
+    origin: process.env.FRONTEND_URL || "http://localhost:3000",
     methods: ["GET", "POST"]
   }
 });
 
 // Middleware
-app.use(helmet());
 app.use(cors());
 app.use(express.json());
+app.use(express.static('public'));
 
-// Rate limiting
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100 // limit each IP to 100 requests per windowMs
-});
-app.use('/api/', limiter);
-
-// MongoDB connection
-mongoose.connect(process.env.MONGODB_URI, {
+// MongoDB Connection
+mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/rti-trading', {
   useNewUrlParser: true,
-  useUnifiedTopology: true,
-});
-
-mongoose.connection.on('connected', () => {
-  console.log('✅ Connected to MongoDB');
-});
-
-mongoose.connection.on('error', (err) => {
-  console.error('❌ MongoDB connection error:', err);
+  useUnifiedTopology: true
 });
 
 // User Schema
@@ -51,65 +36,48 @@ const userSchema = new mongoose.Schema({
   username: { type: String, required: true, unique: true },
   email: { type: String, required: true, unique: true },
   password: { type: String, required: true },
-  tier: { type: String, enum: ['SILVER', 'GOLD', 'PLATINUM', 'ADMIN'], default: 'SILVER' },
+  tier: { 
+    type: String, 
+    enum: ['FREE', 'WEEKLY', 'MONTHLY', 'ADMIN'], 
+    default: 'FREE' 
+  },
   isAdmin: { type: Boolean, default: false },
-  avatar: { type: String, default: '' },
-  createdAt: { type: Date, default: Date.now },
-  lastLogin: { type: Date, default: Date.now },
-  isActive: { type: Boolean, default: true }
+  avatar: { 
+    type: String, 
+    default: 'https://ui-avatars.com/api/?background=22c55e&color=fff&name=' 
+  },
+  stripeCustomerId: String,
+  subscriptionId: String,
+  subscriptionStatus: String,
+  subscriptionEndDate: Date,
+  lastActive: { type: Date, default: Date.now },
+  createdAt: { type: Date, default: Date.now }
 });
-
-const User = mongoose.model('User', userSchema);
 
 // Alert Schema
 const alertSchema = new mongoose.Schema({
   title: { type: String, required: true },
   message: { type: String, required: true },
-  type: { type: String, enum: ['BOT_SIGNAL', 'NEWS', 'MARKET_UPDATE'], required: true },
-  priority: { type: String, enum: ['LOW', 'MEDIUM', 'HIGH'], default: 'MEDIUM' },
-  symbol: { type: String, default: '' },
-  botName: { type: String, default: '' },
-  pnl: { type: String, default: null },
-  status: { type: String, enum: ['ACTIVE', 'CLOSED', 'ARCHIVED'], default: 'ACTIVE' },
-  createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-  createdAt: { type: Date, default: Date.now },
-  expiresAt: { type: Date, default: () => new Date(Date.now() + 24 * 60 * 60 * 1000) } // 24 hours
-});
-
-const Alert = mongoose.model('Alert', alertSchema);
-
-// Trading Strategy Schema
-const strategySchema = new mongoose.Schema({
-  name: { type: String, required: true },
-  symbol: { type: String, required: true },
-  timeframe: { type: String, required: true },
-  script: { type: String, required: true },
-  levels: {
-    resistance: String,
-    support: String,
-    target: String,
-    stop: String
+  type: { 
+    type: String, 
+    enum: ['NEWS', 'BOT_SIGNAL', 'MARKET_UPDATE'], 
+    required: true 
   },
-  isActive: { type: Boolean, default: true },
+  priority: { 
+    type: String, 
+    enum: ['LOW', 'MEDIUM', 'HIGH'], 
+    default: 'MEDIUM' 
+  },
+  botName: String,
+  pnl: String,
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   createdAt: { type: Date, default: Date.now }
 });
 
-const Strategy = mongoose.model('Strategy', strategySchema);
+const User = mongoose.model('User', userSchema);
+const Alert = mongoose.model('Alert', alertSchema);
 
-// Market Data Schema
-const marketDataSchema = new mongoose.Schema({
-  symbol: { type: String, required: true },
-  price: { type: Number, required: true },
-  change: { type: Number, default: 0 },
-  changePercent: { type: Number, default: 0 },
-  volume: { type: Number, default: 0 },
-  timestamp: { type: Date, default: Date.now }
-});
-
-const MarketData = mongoose.model('MarketData', marketDataSchema);
-
-// JWT Authentication Middleware
+// Authentication Middleware
 const authenticateToken = (req, res, next) => {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
@@ -118,72 +86,98 @@ const authenticateToken = (req, res, next) => {
     return res.status(401).json({ error: 'Access token required' });
   }
 
-  jwt.verify(token, process.env.JWT_SECRET || 'fallback_secret', (err, user) => {
-    if (err) return res.status(403).json({ error: 'Invalid token' });
-    req.user = user;
+  jwt.verify(token, process.env.JWT_SECRET || 'fallback_secret', async (err, decoded) => {
+    if (err) {
+      return res.status(403).json({ error: 'Invalid token' });
+    }
+    
+    try {
+      const user = await User.findById(decoded.userId);
+      if (!user) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+      
+      user.lastActive = new Date();
+      await user.save();
+      
+      req.user = user;
+      next();
+    } catch (error) {
+      res.status(500).json({ error: 'Server error' });
+    }
+  });
+};
+
+// Subscription Middleware
+const checkSubscription = (requiredTier = 'WEEKLY') => {
+  return (req, res, next) => {
+    const user = req.user;
+    
+    if (user.isAdmin) {
+      return next();
+    }
+    
+    if (user.tier === 'FREE' && requiredTier !== 'FREE') {
+      return res.status(402).json({ 
+        error: 'Subscription required',
+        message: 'Upgrade to access this feature',
+        requiredTier 
+      });
+    }
+    
+    if (user.subscriptionEndDate && user.subscriptionEndDate < new Date()) {
+      user.tier = 'FREE';
+      user.save();
+      return res.status(402).json({ 
+        error: 'Subscription expired',
+        message: 'Please renew your subscription' 
+      });
+    }
+    
     next();
-  });
+  };
 };
 
-// Admin middleware
-const requireAdmin = (req, res, next) => {
-  if (!req.user.isAdmin) {
-    return res.status(403).json({ error: 'Admin access required' });
-  }
-  next();
-};
-
-// Routes
-
-// Health check
-app.get('/api/health', (req, res) => {
-  res.json({ 
-    status: 'healthy', 
-    timestamp: new Date().toISOString(),
-    uptime: process.uptime()
-  });
-});
-
-// User Registration
+// ====== AUTHENTICATION ROUTES ======
 app.post('/api/auth/register', async (req, res) => {
   try {
     const { username, email, password } = req.body;
-
-    if (!username || !email || !password) {
-      return res.status(400).json({ error: 'All fields are required' });
-    }
-
-    // Check if user exists
-    const existingUser = await User.findOne({
-      $or: [{ email }, { username }]
+    
+    const existingUser = await User.findOne({ 
+      $or: [{ email }, { username }] 
     });
-
+    
     if (existingUser) {
-      return res.status(400).json({ error: 'User already exists' });
+      return res.status(400).json({ 
+        error: 'Username or email already exists' 
+      });
     }
-
-    // Hash password
-    const hashedPassword = await bcrypt.hash(password, 12);
-
-    // Create user
+    
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
+    
+    const customer = await stripe.customers.create({
+      email,
+      name: username
+    });
+    
     const user = new User({
       username,
       email,
       password: hashedPassword,
-      avatar: `https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=40&h=40&fit=crop&crop=face&facepad=2&bg=gray`
+      avatar: `https://ui-avatars.com/api/?background=22c55e&color=fff&name=${username}`,
+      stripeCustomerId: customer.id
     });
-
+    
     await user.save();
-
-    // Generate token
+    
     const token = jwt.sign(
-      { userId: user._id, username: user.username, isAdmin: user.isAdmin },
+      { userId: user._id }, 
       process.env.JWT_SECRET || 'fallback_secret',
       { expiresIn: '7d' }
     );
-
+    
     res.status(201).json({
-      message: 'User created successfully',
       token,
       user: {
         id: user._id,
@@ -194,49 +188,37 @@ app.post('/api/auth/register', async (req, res) => {
         avatar: user.avatar
       }
     });
+    
   } catch (error) {
     console.error('Registration error:', error);
     res.status(500).json({ error: 'Server error during registration' });
   }
 });
 
-// User Login
 app.post('/api/auth/login', async (req, res) => {
   try {
     const { username, password } = req.body;
-
-    if (!username || !password) {
-      return res.status(400).json({ error: 'Username and password are required' });
-    }
-
-    // Find user
-    const user = await User.findOne({
-      $or: [{ username }, { email: username }]
+    
+    const user = await User.findOne({ 
+      $or: [{ username }, { email: username }] 
     });
-
+    
     if (!user) {
       return res.status(400).json({ error: 'Invalid credentials' });
     }
-
-    // Check password
+    
     const isValidPassword = await bcrypt.compare(password, user.password);
     if (!isValidPassword) {
       return res.status(400).json({ error: 'Invalid credentials' });
     }
-
-    // Update last login
-    user.lastLogin = new Date();
-    await user.save();
-
-    // Generate token
+    
     const token = jwt.sign(
-      { userId: user._id, username: user.username, isAdmin: user.isAdmin },
+      { userId: user._id }, 
       process.env.JWT_SECRET || 'fallback_secret',
       { expiresIn: '7d' }
     );
-
+    
     res.json({
-      message: 'Login successful',
       token,
       user: {
         id: user._id,
@@ -247,247 +229,318 @@ app.post('/api/auth/login', async (req, res) => {
         avatar: user.avatar
       }
     });
+    
   } catch (error) {
     console.error('Login error:', error);
     res.status(500).json({ error: 'Server error during login' });
   }
 });
 
-// Get User Profile
-app.get('/api/auth/profile', authenticateToken, async (req, res) => {
+app.get('/api/auth/profile', authenticateToken, (req, res) => {
+  res.json({
+    id: req.user._id,
+    username: req.user.username,
+    email: req.user.email,
+    tier: req.user.tier,
+    isAdmin: req.user.isAdmin,
+    avatar: req.user.avatar
+  });
+});
+
+// ====== SUBSCRIPTION ROUTES ======
+app.post('/api/subscription/create-checkout-session', authenticateToken, async (req, res) => {
   try {
-    const user = await User.findById(req.user.userId).select('-password');
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-    res.json(user);
+    const { priceId } = req.body;
+    const user = req.user;
+    
+    const session = await stripe.checkout.sessions.create({
+      customer: user.stripeCustomerId,
+      payment_method_types: ['card'],
+      line_items: [{
+        price: priceId,
+        quantity: 1,
+      }],
+      mode: 'subscription',
+      success_url: `${process.env.FRONTEND_URL}/dashboard.html?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${process.env.FRONTEND_URL}/subscription.html`,
+      metadata: {
+        userId: user._id.toString()
+      }
+    });
+    
+    res.json({ sessionId: session.id });
   } catch (error) {
-    res.status(500).json({ error: 'Server error' });
+    console.error('Checkout session error:', error);
+    res.status(500).json({ error: 'Error creating checkout session' });
   }
 });
 
-// Get Alerts
+// Stripe Webhook
+app.post('/api/webhooks/stripe', express.raw({type: 'application/json'}), async (req, res) => {
+  const sig = req.headers['stripe-signature'];
+  let event;
+  
+  try {
+    event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
+  } catch (err) {
+    console.error('Webhook signature verification failed:', err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+  
+  try {
+    switch (event.type) {
+      case 'checkout.session.completed':
+        const session = event.data.object;
+        const subscription = await stripe.subscriptions.retrieve(session.subscription);
+        
+        const tier = subscription.items.data[0].price.id.includes('weekly') ? 'WEEKLY' : 'MONTHLY';
+        const endDate = new Date(subscription.current_period_end * 1000);
+        
+        await User.findByIdAndUpdate(session.metadata.userId, {
+          subscriptionId: subscription.id,
+          subscriptionStatus: subscription.status,
+          tier: tier,
+          subscriptionEndDate: endDate
+        });
+        break;
+        
+      case 'customer.subscription.deleted':
+        const deletedSub = event.data.object;
+        await User.findOneAndUpdate(
+          { subscriptionId: deletedSub.id },
+          {
+            tier: 'FREE',
+            subscriptionStatus: 'canceled',
+            subscriptionEndDate: null
+          }
+        );
+        break;
+    }
+    
+    res.json({ received: true });
+  } catch (error) {
+    console.error('Webhook processing error:', error);
+    res.status(500).json({ error: 'Webhook processing failed' });
+  }
+});
+
+// ====== ALERT ROUTES ======
 app.get('/api/alerts', authenticateToken, async (req, res) => {
   try {
-    const { type, priority } = req.query;
-    let filter = { status: { $ne: 'ARCHIVED' } };
-
-    if (type && type !== 'ALL') {
-      filter.type = type;
+    const { type = 'ALL' } = req.query;
+    const user = req.user;
+    
+    let query = {};
+    if (type !== 'ALL') {
+      query.type = type;
     }
-    if (priority) {
-      filter.priority = priority;
+    
+    const alerts = await Alert.find(query)
+      .populate('createdBy', 'username avatar')
+      .sort({ createdAt: -1 });
+    
+    // Apply subscription limits
+    let limitedAlerts = alerts;
+    if (user.tier === 'FREE' && !user.isAdmin) {
+      limitedAlerts = alerts.slice(0, 3);
     }
-
-    const alerts = await Alert.find(filter)
-      .populate('createdBy', 'username')
-      .sort({ createdAt: -1 })
-      .limit(50);
-
-    res.json(alerts);
+    
+    res.json(limitedAlerts);
   } catch (error) {
-    res.status(500).json({ error: 'Server error' });
+    console.error('Error fetching alerts:', error);
+    res.status(500).json({ error: 'Error fetching alerts' });
   }
 });
 
-// Create Alert (Admin only)
-app.post('/api/alerts', authenticateToken, requireAdmin, async (req, res) => {
+app.post('/api/alerts', authenticateToken, async (req, res) => {
   try {
-    const { title, message, type, priority, symbol, botName } = req.body;
-
+    if (!req.user.isAdmin) {
+      return res.status(403).json({ error: 'Admin access required' });
+    }
+    
+    const { title, message, type, priority, botName, pnl } = req.body;
+    
     const alert = new Alert({
       title,
       message,
       type,
       priority,
-      symbol,
       botName,
-      createdBy: req.user.userId
+      pnl,
+      createdBy: req.user._id
     });
-
+    
     await alert.save();
-    await alert.populate('createdBy', 'username');
-
-    // Emit to all connected clients
+    await alert.populate('createdBy', 'username avatar');
+    
     io.emit('newAlert', alert);
-
+    
     res.status(201).json(alert);
   } catch (error) {
-    res.status(500).json({ error: 'Server error' });
+    console.error('Error creating alert:', error);
+    res.status(500).json({ error: 'Error creating alert' });
   }
 });
 
-// Delete Alert (Admin only)
-app.delete('/api/alerts/:id', authenticateToken, requireAdmin, async (req, res) => {
+app.delete('/api/alerts/:id', authenticateToken, async (req, res) => {
   try {
+    if (!req.user.isAdmin) {
+      return res.status(403).json({ error: 'Admin access required' });
+    }
+    
     const alert = await Alert.findByIdAndDelete(req.params.id);
     if (!alert) {
       return res.status(404).json({ error: 'Alert not found' });
     }
-
-    // Emit to all connected clients
+    
     io.emit('alertDeleted', req.params.id);
-
-    res.json({ message: 'Alert deleted successfully' });
+    
+    res.json({ message: 'Alert deleted' });
   } catch (error) {
-    res.status(500).json({ error: 'Server error' });
+    console.error('Error deleting alert:', error);
+    res.status(500).json({ error: 'Error deleting alert' });
   }
 });
 
-// Get Trading Strategies
-app.get('/api/strategies', authenticateToken, async (req, res) => {
-  try {
-    const strategies = await Strategy.find({ isActive: true })
-      .populate('createdBy', 'username')
-      .sort({ createdAt: -1 });
-
-    res.json(strategies);
-  } catch (error) {
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-// Create Trading Strategy
-app.post('/api/strategies', authenticateToken, async (req, res) => {
-  try {
-    const { name, symbol, timeframe, script, levels } = req.body;
-
-    const strategy = new Strategy({
-      name,
-      symbol,
-      timeframe,
-      script,
-      levels,
-      createdBy: req.user.userId
-    });
-
-    await strategy.save();
-    await strategy.populate('createdBy', 'username');
-
-    res.status(201).json(strategy);
-  } catch (error) {
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-// Get Market Data
-app.get('/api/market/:symbol', async (req, res) => {
-  try {
-    const { symbol } = req.params;
-    const marketData = await MarketData.findOne({ symbol: symbol.toUpperCase() })
-      .sort({ timestamp: -1 });
-
-    if (!marketData) {
-      return res.status(404).json({ error: 'Market data not found' });
-    }
-
-    res.json(marketData);
-  } catch (error) {
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-// Get Active Users
+// ====== USER ROUTES ======
 app.get('/api/users/active', authenticateToken, async (req, res) => {
   try {
-    const users = await User.find({ 
-      isActive: true,
-      lastLogin: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } // Last 24 hours
-    })
-    .select('username tier avatar lastLogin')
-    .sort({ lastLogin: -1 })
-    .limit(20);
-
-    res.json(users);
+    const user = req.user;
+    const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+    
+    const activeUsers = await User.find({
+      lastActive: { $gte: fiveMinutesAgo }
+    }).select('username avatar tier lastActive');
+    
+    let limitedUsers = activeUsers;
+    if (user.tier === 'FREE' && !user.isAdmin) {
+      limitedUsers = activeUsers.slice(0, 3);
+    }
+    
+    res.json(limitedUsers);
   } catch (error) {
-    res.status(500).json({ error: 'Server error' });
+    console.error('Error fetching active users:', error);
+    res.status(500).json({ error: 'Error fetching active users' });
   }
 });
 
-// Socket.io for real-time updates
-io.on('connection', (socket) => {
-  console.log('User connected:', socket.id);
+// ====== MARKET DATA ROUTES ======
+app.get('/api/market/data', authenticateToken, checkSubscription('WEEKLY'), async (req, res) => {
+  try {
+    const marketData = {
+      'BTC': {
+        price: 45000 + Math.random() * 1000,
+        change: (Math.random() - 0.5) * 1000,
+        changePercent: (Math.random() - 0.5) * 10
+      },
+      'ETH': {
+        price: 3000 + Math.random() * 200,
+        change: (Math.random() - 0.5) * 100,
+        changePercent: (Math.random() - 0.5) * 8
+      },
+      'SOL': {
+        price: 100 + Math.random() * 20,
+        change: (Math.random() - 0.5) * 10,
+        changePercent: (Math.random() - 0.5) * 12
+      }
+    };
+    
+    res.json(marketData);
+  } catch (error) {
+    res.status(500).json({ error: 'Error fetching market data' });
+  }
+});
 
+// ====== SOCKET.IO REAL-TIME FEATURES ======
+io.on('connection', (socket) => {
+  console.log('👤 User connected:', socket.id);
+  
   socket.on('joinTradingRoom', (userId) => {
     socket.join('trading-room');
-    console.log(`User ${userId} joined trading room`);
+    console.log(`👤 User ${userId} joined trading room`);
   });
-
+  
   socket.on('disconnect', () => {
-    console.log('User disconnected:', socket.id);
+    console.log('👤 User disconnected:', socket.id);
   });
 });
 
-// Mock market data updates (replace with real market data API)
-cron.schedule('*/30 * * * * *', async () => {
-  try {
-    const symbols = ['SPY', 'QQQ', 'BTC', 'TSLA', 'AAPL'];
-    
-    for (const symbol of symbols) {
-      const lastData = await MarketData.findOne({ symbol }).sort({ timestamp: -1 });
-      const basePrice = lastData ? lastData.price : getRandomPrice(symbol);
-      
-      const change = (Math.random() - 0.5) * 2; // Random change between -1 and 1
-      const newPrice = Math.max(0.01, basePrice + change);
-      const changePercent = ((newPrice - basePrice) / basePrice) * 100;
-
-      const marketData = new MarketData({
-        symbol,
-        price: Math.round(newPrice * 100) / 100,
-        change: Math.round(change * 100) / 100,
-        changePercent: Math.round(changePercent * 100) / 100,
-        volume: Math.floor(Math.random() * 1000000)
-      });
-
-      await marketData.save();
-      
-      // Emit to all connected clients
-      io.to('trading-room').emit('marketUpdate', marketData);
-    }
-  } catch (error) {
-    console.error('Market data update error:', error);
-  }
-});
-
-function getRandomPrice(symbol) {
-  const basePrices = {
-    'SPY': 450,
-    'QQQ': 380,
-    'BTC': 45000,
-    'TSLA': 250,
-    'AAPL': 175
+// Simulate market updates every 30 seconds
+setInterval(() => {
+  const symbols = ['BTC', 'ETH', 'SOL'];
+  const randomSymbol = symbols[Math.floor(Math.random() * symbols.length)];
+  
+  const marketUpdate = {
+    symbol: randomSymbol,
+    price: Math.random() * 50000,
+    change: (Math.random() - 0.5) * 1000,
+    changePercent: (Math.random() - 0.5) * 10,
+    timestamp: new Date()
   };
-  return basePrices[symbol] || 100;
-}
+  
+  io.to('trading-room').emit('marketUpdate', marketUpdate);
+}, 30000);
 
-// Create default admin user
-async function createDefaultAdmin() {
+// Create admin user if doesn't exist
+const createAdminUser = async () => {
   try {
-    const adminExists = await User.findOne({ isAdmin: true });
-    if (adminExists) return;
-
-    const hashedPassword = await bcrypt.hash('admin123', 12);
-    const admin = new User({
-      username: 'admin',
-      email: 'admin@cashflowops.pro',
-      password: hashedPassword,
-      tier: 'ADMIN',
-      isAdmin: true,
-      avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=40&h=40&fit=crop&crop=face&facepad=2&bg=gray'
-    });
-
-    await admin.save();
-    console.log('✅ Default admin user created');
+    const adminExists = await User.findOne({ username: 'admin' });
+    if (!adminExists) {
+      const salt = await bcrypt.genSalt(10);
+      const hashedPassword = await bcrypt.hash('admin123', salt);
+      
+      const customer = await stripe.customers.create({
+        email: 'admin@rti-cashflowops.com',
+        name: 'Admin User'
+      });
+      
+      const admin = new User({
+        username: 'admin',
+        email: 'admin@rti-cashflowops.com',
+        password: hashedPassword,
+        tier: 'ADMIN',
+        isAdmin: true,
+        avatar: 'https://ui-avatars.com/api/?background=ef4444&color=fff&name=Admin',
+        stripeCustomerId: customer.id
+      });
+      
+      await admin.save();
+      console.log('👑 Admin user created - username: admin, password: admin123');
+    }
   } catch (error) {
     console.error('Error creating admin user:', error);
   }
-}
+};
 
-// Start server
-const PORT = process.env.PORT || 3001;
-server.listen(PORT, () => {
-  console.log(`🚀 RTi Trading Backend running on port ${PORT}`);
-  createDefaultAdmin();
+// Error handling middleware
+app.use((error, req, res, next) => {
+  console.error('Server error:', error);
+  res.status(500).json({ error: 'Internal server error' });
 });
+
+// Initialize server
+const PORT = process.env.PORT || 5000;
+
+const startServer = async () => {
+  try {
+    await mongoose.connection.once('open', () => {
+      console.log('🗄️  Connected to MongoDB');
+    });
+    
+    await createAdminUser();
+    
+    server.listen(PORT, () => {
+      console.log(`🚀 RTi Cashflowops Backend running on port ${PORT}`);
+      console.log(`📡 Socket.IO enabled for real-time features`);
+      console.log(`💳 Stripe integration ready`);
+      console.log(`🔒 Subscription system active`);
+    });
+  } catch (error) {
+    console.error('Failed to start server:', error);
+    process.exit(1);
+  }
+};
+
+startServer();
 
 module.exports = app;
