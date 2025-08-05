@@ -1,5 +1,5 @@
 // 📁 FILE: rti-trading-backend/server.js
-// COMPLETE SERVER WITH CORS FIX FOR PRODUCTION
+// COMPLETE SERVER WITH CORS FIX FOR PRODUCTION + TEST USER
 
 const express = require('express');
 const cors = require('cors');
@@ -639,6 +639,46 @@ const createAdminUser = async () => {
   }
 };
 
+// Create test user for subscription testing
+const createTestUser = async () => {
+  try {
+    const testExists = await User.findOne({ username: 'testuser' });
+    if (!testExists) {
+      const salt = await bcrypt.genSalt(10);
+      const hashedPassword = await bcrypt.hash('test123', salt);
+      
+      const customer = await stripe.customers.create({
+        email: 'test@example.com',
+        name: 'Test User'
+      });
+      
+      const testUser = new User({
+        username: 'testuser',
+        email: 'test@example.com',
+        password: hashedPassword,
+        tier: 'FREE',
+        isAdmin: false,
+        avatar: 'https://ui-avatars.com/api/?background=3b82f6&color=fff&name=Test',
+        stripeCustomerId: customer.id,
+        // Explicitly ensure no subscription history
+        subscriptionId: undefined,
+        subscriptionStatus: undefined,
+        subscriptionEndDate: undefined
+      });
+      
+      await testUser.save();
+      console.log('🧪 Test user created for subscription testing:');
+      console.log('   Username: testuser');
+      console.log('   Password: test123');
+      console.log('   Email: test@example.com');
+      console.log('   Tier: FREE (no subscription history)');
+      console.log('   This user will be prompted for subscription on dashboard access');
+    }
+  } catch (error) {
+    console.error('Error creating test user:', error);
+  }
+};
+
 // Error handling middleware
 app.use((error, req, res, next) => {
   console.error('Server error:', error);
@@ -655,6 +695,7 @@ const startServer = async () => {
     });
     
     await createAdminUser();
+    await createTestUser(); // Add test user creation
     await initializeSubscriptionPlans();
     
     server.listen(PORT, () => {
@@ -664,6 +705,9 @@ const startServer = async () => {
       console.log(`🔒 Subscription system active`);
       console.log(`🌐 CORS enabled for: cashflowops.pro`);
       console.log(`🔗 Test endpoint: http://localhost:${PORT}/api/test`);
+      console.log(`\n🧪 TEST CREDENTIALS:`);
+      console.log(`   Admin: admin / admin123`);
+      console.log(`   Test User: testuser / test123 (will require subscription)`);
     });
   } catch (error) {
     console.error('Failed to start server:', error);
