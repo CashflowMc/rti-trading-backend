@@ -1,5 +1,5 @@
 // 📁 FILE: rti-trading-backend/server.js
-// COMPLETE CORRECTED VERSION - Replace your entire server.js with this
+// COMPLETE SERVER WITH CORS FIX FOR PRODUCTION
 
 const express = require('express');
 const cors = require('cors');
@@ -13,42 +13,65 @@ require('dotenv').config();
 
 const app = express();
 const server = createServer(app);
+
+// FIXED CORS CONFIGURATION FOR PRODUCTION
+app.use(cors({
+  origin: [
+    'http://localhost:3000',
+    'http://127.0.0.1:3000',
+    'http://localhost:8080',
+    'http://127.0.0.1:8080',
+    'http://localhost:5500',
+    'http://127.0.0.1:5500',
+    'https://cashflowops.pro',
+    'https://www.cashflowops.pro'
+  ],
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
+  optionsSuccessStatus: 200
+}));
+
+// Additional CORS headers
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  const allowedOrigins = [
+    'http://localhost:3000',
+    'http://127.0.0.1:3000',
+    'https://cashflowops.pro',
+    'https://www.cashflowops.pro'
+  ];
+  
+  if (allowedOrigins.includes(origin)) {
+    res.header('Access-Control-Allow-Origin', origin);
+  }
+  
+  res.header('Access-Control-Allow-Credentials', true);
+  res.header('Access-Control-Allow-Methods', 'GET,HEAD,OPTIONS,POST,PUT,DELETE');
+  res.header('Access-Control-Allow-Headers', 'Access-Control-Allow-Headers, Origin, Accept, X-Requested-With, Content-Type, Access-Control-Request-Method, Access-Control-Request-Headers, Authorization');
+  
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+  next();
+});
+
+// Socket.IO with CORS fix
 const io = new Server(server, {
   cors: {
     origin: [
       'http://localhost:3000',
-      'http://127.0.0.1:3000', 
-      'http://localhost:8080',
-      'http://127.0.0.1:8080',
-      'http://localhost:5500',
-      'http://127.0.0.1:5500'
+      'https://cashflowops.pro',
+      'https://www.cashflowops.pro'
     ],
     credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization']
+    methods: ["GET", "POST"]
   }
 });
 
 // Middleware
-app.use(cors({
-  origin: [
-    'http://localhost:3000',
-    'http://127.0.0.1:3000', 
-    'http://localhost:8080',
-    'http://127.0.0.1:8080',
-    'http://localhost:5500',
-    'http://127.0.0.1:5500'
-  ],
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
-}));
-
 app.use(express.json());
 app.use(express.static('public'));
-
-// Add OPTIONS handler for preflight requests
-app.options('*', cors());
 
 // MongoDB Connection
 mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/rti-trading', {
@@ -227,7 +250,8 @@ app.get('/api/test', (req, res) => {
   res.json({ 
     message: 'Backend is working!', 
     timestamp: new Date().toISOString(),
-    status: 'ok'
+    status: 'ok',
+    cors: 'enabled'
   });
 });
 
@@ -638,6 +662,7 @@ const startServer = async () => {
       console.log(`📡 Socket.IO enabled for real-time features`);
       console.log(`💳 Stripe integration ready`);
       console.log(`🔒 Subscription system active`);
+      console.log(`🌐 CORS enabled for: cashflowops.pro`);
       console.log(`🔗 Test endpoint: http://localhost:${PORT}/api/test`);
     });
   } catch (error) {
