@@ -1,7 +1,7 @@
 {
   "name": "rti-trading-backend",
   "version": "1.0.0",
-  "description": "RTi Cashflowops Trading Backend with Subscription Management",
+  "description": "RTi Cashflowops Trading Backend with Subscription Management and Avatar Uploads",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -20,7 +20,8 @@
     "socket.io": "^4.7.4",
     "helmet": "^7.1.0",
     "express-rate-limit": "^7.1.5",
-    "compression": "^1.7.4"
+    "compression": "^1.7.4",
+    "multer": "^1.4.5-lts.1"
   },
   "devDependencies": {
     "nodemon": "^3.0.1",
@@ -36,7 +37,9 @@
     "subscription",
     "payments",
     "real-time",
-    "crypto"
+    "crypto",
+    "avatar-upload",
+    "file-upload"
   ],
   "author": "RTi Cashflowops",
   "license": "MIT"
