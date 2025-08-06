@@ -1,5 +1,5 @@
 // 📁 FILE: rti-trading-backend/server.js
-// COMPLETE SERVER WITH CORS FIX FOR PRODUCTION + TEST USER
+// COMPLETE SERVER WITH CORS FIX FOR PRODUCTION + TEST USER + AVATAR UPLOAD
 
 const express = require('express');
 const cors = require('cors');
@@ -9,6 +9,9 @@ const jwt = require('jsonwebtoken');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const { createServer } = require('http');
 const { Server } = require('socket.io');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
 require('dotenv').config();
 
 const app = express();
@@ -72,6 +75,47 @@ const io = new Server(server, {
 // Middleware
 app.use(express.json());
 app.use(express.static('public'));
+
+// ====== AVATAR UPLOAD CONFIGURATION ======
+// Create uploads directory if it doesn't exist
+const uploadDir = path.join(__dirname, 'uploads/avatars');
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
+}
+
+// Configure multer for avatar uploads
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, uploadDir);
+  },
+  filename: (req, file, cb) => {
+    const userId = req.user._id;
+    const timestamp = Date.now();
+    const ext = path.extname(file.originalname);
+    cb(null, `user_${userId}_${timestamp}${ext}`);
+  }
+});
+
+const fileFilter = (req, file, cb) => {
+  const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'];
+  if (allowedTypes.includes(file.mimetype)) {
+    cb(null, true);
+  } else {
+    cb(new Error('Invalid file type. Only images are allowed.'), false);
+  }
+};
+
+const upload = multer({
+  storage: storage,
+  fileFilter: fileFilter,
+  limits: {
+    fileSize: 5 * 1024 * 1024, // 5MB limit
+    files: 1
+  }
+});
+
+// Serve uploaded files statically
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // MongoDB Connection
 mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/rti-trading', {
@@ -551,6 +595,134 @@ app.get('/api/users/active', authenticateToken, async (req, res) => {
   }
 });
 
+// ====== AVATAR UPLOAD ROUTES ======
+app.get('/api/users/avatar/test', authenticateToken, (req, res) => {
+  res.json({
+    message: 'Avatar upload endpoint is working!',
+    user_id: req.user._id,
+    timestamp: new Date().toISOString()
+  });
+});
+
+app.post('/api/users/avatar', authenticateToken, (req, res) => {
+  const userId = req.user._id;
+  console.log(`📸 Avatar upload request from user: ${userId}`);
+  
+  upload.single('avatar')(req, res, async (err) => {
+    try {
+      // Handle upload errors
+      if (err) {
+        console.error('❌ Upload error:', err);
+        if (err instanceof multer.MulterError) {
+          if (err.code === 'LIMIT_FILE_SIZE') {
+            return res.status(400).json({ error: 'File size too large. Maximum 5MB allowed.' });
+          }
+        }
+        return res.status(400).json({ error: err.message });
+      }
+
+      // Check if file was uploaded
+      if (!req.file) {
+        return res.status(400).json({ error: 'No file uploaded' });
+      }
+
+      const filename = req.file.filename;
+      
+      // Generate the URL for the uploaded file
+      const baseUrl = process.env.NODE_ENV === 'production' 
+        ? `https://${req.get('host')}`
+        : `${req.protocol}://${req.get('host')}`;
+      const avatarUrl = `${baseUrl}/uploads/avatars/${filename}`;
+
+      console.log(`✅ File uploaded:`, {
+        userId,
+        filename,
+        avatarUrl,
+        size: req.file.size
+      });
+
+      // Delete old avatar file (cleanup)
+      try {
+        const currentUser = await User.findById(userId);
+        if (currentUser && currentUser.avatar && currentUser.avatar.includes('/uploads/avatars/')) {
+          const oldFilename = path.basename(currentUser.avatar);
+          const oldFilePath = path.join(uploadDir, oldFilename);
+          if (fs.existsSync(oldFilePath) && oldFilename.startsWith('user_')) {
+            fs.unlinkSync(oldFilePath);
+            console.log(`🗑️ Deleted old avatar: ${oldFilename}`);
+          }
+        }
+      } catch (cleanupError) {
+        console.warn('⚠️ Could not clean up old avatar:', cleanupError.message);
+      }
+
+      // Update user's avatar in database
+      const updatedUser = await User.findByIdAndUpdate(
+        userId, 
+        { avatar: avatarUrl },
+        { new: true }
+      ).select('username avatar email tier');
+
+      if (!updatedUser) {
+        // Delete uploaded file if user update failed
+        if (fs.existsSync(req.file.path)) {
+          fs.unlinkSync(req.file.path);
+        }
+        return res.status(404).json({ error: 'User not found' });
+      }
+
+      console.log(`✅ Avatar upload completed for user ${userId}`);
+
+      res.json({
+        success: true,
+        message: 'Avatar uploaded successfully',
+        avatarUrl: avatarUrl,
+        filename: filename,
+        user: {
+          id: userId,
+          username: updatedUser.username,
+          avatar: avatarUrl
+        }
+      });
+
+    } catch (error) {
+      console.error('❌ Avatar upload error:', error);
+      
+      // Clean up uploaded file if there was an error
+      if (req.file && fs.existsSync(req.file.path)) {
+        fs.unlinkSync(req.file.path);
+      }
+      
+      res.status(500).json({ 
+        error: 'Failed to upload avatar',
+        details: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
+      });
+    }
+  });
+});
+
+// Get user avatar endpoint (optional)
+app.get('/api/users/:userId/avatar', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const user = await User.findById(userId).select('avatar username');
+    
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    res.json({
+      userId: user._id,
+      username: user.username,
+      avatar: user.avatar
+    });
+
+  } catch (error) {
+    console.error('❌ Error fetching user avatar:', error);
+    res.status(500).json({ error: 'Failed to fetch user avatar' });
+  }
+});
+
 // ====== MARKET DATA ROUTES ======
 app.get('/api/market/data', authenticateToken, checkSubscription('WEEKLY'), async (req, res) => {
   try {
@@ -703,8 +875,10 @@ const startServer = async () => {
       console.log(`📡 Socket.IO enabled for real-time features`);
       console.log(`💳 Stripe integration ready`);
       console.log(`🔒 Subscription system active`);
+      console.log(`📸 Avatar upload system enabled`);
       console.log(`🌐 CORS enabled for: cashflowops.pro`);
       console.log(`🔗 Test endpoint: http://localhost:${PORT}/api/test`);
+      console.log(`📸 Avatar test: http://localhost:${PORT}/api/users/avatar/test`);
       console.log(`\n🧪 TEST CREDENTIALS:`);
       console.log(`   Admin: admin / admin123`);
       console.log(`   Test User: testuser / test123 (will require subscription)`);
