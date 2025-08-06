@@ -1,5 +1,5 @@
 // 📁 FILE: rti-trading-backend/server.js
-// COMPLETE SERVER WITH CORS FIX FOR PRODUCTION + TEST USER + AVATAR UPLOAD
+// COMPLETE SERVER WITH CORS FIX + AVATAR UPLOAD + PROFILE ENDPOINTS
 
 const express = require('express');
 const cors = require('cors');
@@ -123,7 +123,7 @@ mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/rti-tradi
   useUnifiedTopology: true
 });
 
-// User Schema
+// ENHANCED USER SCHEMA WITH PROFILE FIELDS
 const userSchema = new mongoose.Schema({
   username: { type: String, required: true, unique: true },
   email: { type: String, required: true, unique: true },
@@ -138,12 +138,58 @@ const userSchema = new mongoose.Schema({
     type: String, 
     default: 'https://ui-avatars.com/api/?background=22c55e&color=fff&name=' 
   },
+  
+  // PROFILE FIELDS
+  bio: {
+    type: String,
+    maxlength: 500,
+    default: ''
+  },
+  tradingExperience: {
+    type: String,
+    enum: ['Beginner', 'Intermediate', 'Advanced', 'Expert'],
+    default: 'Beginner'
+  },
+  favoriteMarkets: [{
+    type: String,
+    enum: ['Forex', 'Crypto', 'Stocks', 'Options', 'Futures', 'Commodities']
+  }],
+  socialLinks: {
+    twitter: { type: String, default: '' },
+    discord: { type: String, default: '' },
+    telegram: { type: String, default: '' }
+  },
+  tradingStats: {
+    winRate: { type: Number, default: 0, min: 0, max: 100 },
+    totalTrades: { type: Number, default: 0, min: 0 },
+    favoriteStrategy: { type: String, default: '' }
+  },
+  isPublic: {
+    type: Boolean,
+    default: true
+  },
+  
+  // SUBSCRIPTION FIELDS
   stripeCustomerId: String,
   subscriptionId: String,
   subscriptionStatus: String,
   subscriptionEndDate: Date,
+  
+  // ACTIVITY TRACKING
   lastActive: { type: Date, default: Date.now },
-  createdAt: { type: Date, default: Date.now }
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now }
+});
+
+// Update timestamps on save
+userSchema.pre('save', function(next) {
+  this.updatedAt = new Date();
+  next();
+});
+
+userSchema.pre('findOneAndUpdate', function(next) {
+  this.set({ updatedAt: new Date() });
+  next();
 });
 
 // Alert Schema
@@ -595,6 +641,183 @@ app.get('/api/users/active', authenticateToken, async (req, res) => {
   }
 });
 
+// ====== USER PROFILE ROUTES ======
+
+// Update user profile (PUT /api/users/profile)
+app.put('/api/users/profile', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const updateData = req.body;
+    
+    console.log(`📝 Profile update request from user: ${userId}`, updateData);
+    
+    // Filter allowed profile fields
+    const allowedFields = [
+      'bio',
+      'tradingExperience', 
+      'favoriteMarkets',
+      'socialLinks',
+      'tradingStats',
+      'isPublic'
+    ];
+    
+    const profileUpdate = {};
+    
+    // Build the profile update object
+    Object.keys(updateData).forEach(key => {
+      if (allowedFields.includes(key)) {
+        profileUpdate[key] = updateData[key];
+      }
+    });
+    
+    // Update user with profile data
+    const updatedUser = await User.findByIdAndUpdate(
+      userId,
+      { 
+        $set: profileUpdate,
+        updatedAt: new Date()
+      },
+      { 
+        new: true,
+        runValidators: true 
+      }
+    ).select('-password');
+    
+    if (!updatedUser) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    console.log(`✅ Profile updated successfully for user ${userId}`);
+    
+    res.json({
+      success: true,
+      message: 'Profile updated successfully',
+      user: {
+        id: updatedUser._id,
+        username: updatedUser.username,
+        email: updatedUser.email,
+        avatar: updatedUser.avatar,
+        tier: updatedUser.tier,
+        isAdmin: updatedUser.isAdmin,
+        bio: updatedUser.bio,
+        tradingExperience: updatedUser.tradingExperience,
+        favoriteMarkets: updatedUser.favoriteMarkets,
+        socialLinks: updatedUser.socialLinks,
+        tradingStats: updatedUser.tradingStats,
+        isPublic: updatedUser.isPublic
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ Profile update error:', error);
+    res.status(500).json({ 
+      error: 'Failed to update profile',
+      details: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
+    });
+  }
+});
+
+// Get user profile by ID (GET /api/users/:userId/profile)
+app.get('/api/users/:userId/profile', authenticateToken, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const requestingUser = req.user;
+    
+    const user = await User.findById(userId).select('-password');
+    
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    // Check if profile is public or if it's the user's own profile or if requesting user is admin
+    const canViewProfile = user.isPublic || 
+                          userId === requestingUser._id.toString() || 
+                          requestingUser.isAdmin;
+    
+    if (!canViewProfile) {
+      return res.status(403).json({ error: 'Profile is private' });
+    }
+    
+    // Return profile data
+    const profileData = {
+      id: user._id,
+      username: user.username,
+      avatar: user.avatar,
+      tier: user.tier,
+      isAdmin: user.isAdmin,
+      bio: user.bio || '',
+      tradingExperience: user.tradingExperience || 'Beginner',
+      favoriteMarkets: user.favoriteMarkets || [],
+      socialLinks: user.socialLinks || {
+        twitter: '',
+        discord: '',
+        telegram: ''
+      },
+      tradingStats: user.tradingStats || {
+        winRate: 0,
+        totalTrades: 0,
+        favoriteStrategy: ''
+      },
+      isPublic: user.isPublic !== false,
+      createdAt: user.createdAt,
+      lastActive: user.lastActive
+    };
+    
+    res.json(profileData);
+    
+  } catch (error) {
+    console.error('❌ Error fetching user profile:', error);
+    res.status(500).json({ error: 'Failed to fetch user profile' });
+  }
+});
+
+// Get current user's profile (GET /api/users/profile)
+app.get('/api/users/profile', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user._id;
+    
+    const user = await User.findById(userId).select('-password');
+    
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    // Return complete profile data for own profile
+    const profileData = {
+      id: user._id,
+      username: user.username,
+      email: user.email,
+      avatar: user.avatar,
+      tier: user.tier,
+      isAdmin: user.isAdmin,
+      bio: user.bio || '',
+      tradingExperience: user.tradingExperience || 'Beginner',
+      favoriteMarkets: user.favoriteMarkets || [],
+      socialLinks: user.socialLinks || {
+        twitter: '',
+        discord: '',
+        telegram: ''
+      },
+      tradingStats: user.tradingStats || {
+        winRate: 0,
+        totalTrades: 0,
+        favoriteStrategy: ''
+      },
+      isPublic: user.isPublic !== false,
+      createdAt: user.createdAt,
+      lastActive: user.lastActive,
+      subscriptionStatus: user.subscriptionStatus,
+      subscriptionEndDate: user.subscriptionEndDate
+    };
+    
+    res.json(profileData);
+    
+  } catch (error) {
+    console.error('❌ Error fetching own profile:', error);
+    res.status(500).json({ error: 'Failed to fetch profile' });
+  }
+});
+
 // ====== AVATAR UPLOAD ROUTES ======
 app.get('/api/users/avatar/test', authenticateToken, (req, res) => {
   res.json({
@@ -867,7 +1090,7 @@ const startServer = async () => {
     });
     
     await createAdminUser();
-    await createTestUser(); // Add test user creation
+    await createTestUser();
     await initializeSubscriptionPlans();
     
     server.listen(PORT, () => {
@@ -876,9 +1099,11 @@ const startServer = async () => {
       console.log(`💳 Stripe integration ready`);
       console.log(`🔒 Subscription system active`);
       console.log(`📸 Avatar upload system enabled`);
+      console.log(`👤 User profile system enabled`);
       console.log(`🌐 CORS enabled for: cashflowops.pro`);
       console.log(`🔗 Test endpoint: http://localhost:${PORT}/api/test`);
       console.log(`📸 Avatar test: http://localhost:${PORT}/api/users/avatar/test`);
+      console.log(`👤 Profile test: http://localhost:${PORT}/api/users/profile`);
       console.log(`\n🧪 TEST CREDENTIALS:`);
       console.log(`   Admin: admin / admin123`);
       console.log(`   Test User: testuser / test123 (will require subscription)`);
