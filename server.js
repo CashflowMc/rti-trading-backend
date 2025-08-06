@@ -1,6 +1,6 @@
-// Frontend API Integration for RTi Cashflowops
-// Base configuration
-const API_BASE_URL = 'https://cashflowops.pro/api'; // or http://localhost:5000/api for development
+// 🔧 CORRECTED Frontend API Configuration
+// Base configuration - FIXED URL
+const API_BASE_URL = 'https://rti-trading-backend-production.up.railway.app/api'; // ✅ CORRECT Railway URL
 
 // Helper function to get auth token
 const getAuthToken = () => {
@@ -36,8 +36,14 @@ const authFetch = async (endpoint, options = {}) => {
   return response;
 };
 
-// API Functions
+// API Functions - ALL USING CORRECT URL NOW
 const API = {
+  // Test endpoint - verify connection
+  testConnection: async () => {
+    const response = await fetch(`${API_BASE_URL}/test`);
+    return response.json();
+  },
+
   // Authentication
   register: async (userData) => {
     const response = await fetch(`${API_BASE_URL}/auth/register`, {
@@ -139,86 +145,53 @@ const API = {
   getActiveUsers: async () => {
     const response = await authFetch('/users/active');
     return response.json();
-  },
-
-  // Test endpoint
-  testConnection: async () => {
-    const response = await fetch(`${API_BASE_URL}/test`);
-    return response.json();
   }
 };
 
-// Usage Examples:
-
-// 1. Login user
-/*
-const loginUser = async (username, password) => {
+// 🧪 QUICK TEST - Run this in browser console to verify connection
+const testBackendConnection = async () => {
   try {
-    const result = await API.login({ username, password });
+    console.log('🔍 Testing backend connection...');
+    const result = await API.testConnection();
+    console.log('✅ Backend connected successfully:', result);
+    return true;
+  } catch (error) {
+    console.error('❌ Backend connection failed:', error);
+    return false;
+  }
+};
+
+// 🧪 QUICK LOGIN TEST
+const testLogin = async () => {
+  try {
+    console.log('🔑 Testing login...');
+    const result = await API.login({ 
+      username: 'testuser', 
+      password: 'test123' 
+    });
+    console.log('✅ Login successful:', result);
+    
     if (result.token) {
       localStorage.setItem('authToken', result.token);
       localStorage.setItem('user', JSON.stringify(result.user));
-      window.location.href = '/dashboard.html';
+      console.log('💾 Token saved to localStorage');
     }
+    
+    return result;
   } catch (error) {
-    console.error('Login failed:', error);
+    console.error('❌ Login failed:', error);
+    return null;
   }
 };
-*/
 
-// 2. Update user profile
-/*
-const updateUserProfile = async (profileData) => {
-  try {
-    const result = await API.updateProfile({
-      bio: profileData.bio,
-      tradingExperience: profileData.tradingExperience,
-      favoriteMarkets: profileData.favoriteMarkets,
-      socialLinks: {
-        twitter: profileData.twitter,
-        discord: profileData.discord,
-        telegram: profileData.telegram
-      },
-      tradingStats: {
-        winRate: profileData.winRate,
-        totalTrades: profileData.totalTrades,
-        favoriteStrategy: profileData.favoriteStrategy
-      },
-      isPublic: profileData.isPublic
-    });
-    console.log('Profile updated:', result);
-  } catch (error) {
-    console.error('Profile update failed:', error);
-  }
-};
-*/
-
-// 3. Upload avatar
-/*
-const handleAvatarUpload = async (fileInput) => {
-  const file = fileInput.files[0];
-  if (!file) return;
-
-  try {
-    const result = await API.uploadAvatar(file);
-    console.log('Avatar uploaded:', result);
-    // Update UI with new avatar URL
-    document.querySelector('.user-avatar').src = result.avatarUrl;
-  } catch (error) {
-    console.error('Avatar upload failed:', error);
-  }
-};
-*/
-
-// 4. Real-time Socket.IO connection
-/*
+// Socket.IO connection using correct URL
 const connectToSocket = () => {
-  const socket = io('https://cashflowops.pro', {
+  const socket = io('https://rti-trading-backend-production.up.railway.app', {
     withCredentials: true
   });
 
   socket.on('connect', () => {
-    console.log('Connected to socket server');
+    console.log('🔌 Connected to socket server');
     const user = JSON.parse(localStorage.getItem('user'));
     if (user) {
       socket.emit('joinTradingRoom', user.id);
@@ -226,17 +199,28 @@ const connectToSocket = () => {
   });
 
   socket.on('newAlert', (alert) => {
-    console.log('New alert:', alert);
+    console.log('🚨 New alert:', alert);
     // Update alerts UI
   });
 
   socket.on('marketUpdate', (update) => {
-    console.log('Market update:', update);
+    console.log('📈 Market update:', update);
     // Update market data UI
+  });
+
+  socket.on('disconnect', () => {
+    console.log('🔌 Disconnected from socket server');
   });
 
   return socket;
 };
-*/
 
 export default API;
+
+// 🚨 IMMEDIATE ACTION: Update this line in your frontend code
+console.log('🔗 API Base URL:', API_BASE_URL);
+console.log('📝 Make sure this points to your Railway backend!');
+
+// For debugging - uncomment these lines temporarily:
+// testBackendConnection();
+// testLogin();
