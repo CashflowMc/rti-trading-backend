@@ -1,19 +1,29 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 
-// API Configuration
-const API_BASE_URL = 'https://rti-trading-backend-production.up.railway.app/api';
+// 🛡️ PHP PROXY CONFIGURATION - BYPASSES CORS
+const PROXY_URL = 'https://cashflowops.pro/api-proxy.php';
 
-const getAuthToken = () => localStorage.getItem('authToken');
+const getAuthToken = () => localStorage.getItem('authToken') || localStorage.getItem('token');
 
-const authFetch = async (endpoint, options = {}) => {
+// 🔧 FIXED: PHP Proxy fetch function instead of direct Railway calls
+const proxyFetch = async (endpoint, options = {}) => {
   const token = getAuthToken();
+  
+  // Clean endpoint (remove leading /api if present)
+  const cleanEndpoint = endpoint.replace(/^\/api\//, '').replace(/^\//, '');
   
   const defaultHeaders = {
     'Content-Type': 'application/json',
     'Authorization': token ? `Bearer ${token}` : ''
   };
 
+  // Handle FormData - don't set Content-Type for FormData
+  if (options.body instanceof FormData) {
+    delete defaultHeaders['Content-Type'];
+  }
+
   const config = {
+    method: 'GET',
     ...options,
     headers: {
       ...defaultHeaders,
@@ -21,10 +31,19 @@ const authFetch = async (endpoint, options = {}) => {
     }
   };
 
-  const response = await fetch(`${API_BASE_URL}${endpoint}`, config);
+  // Build proxy URL
+  const proxyEndpoint = `${PROXY_URL}?endpoint=${encodeURIComponent(cleanEndpoint)}`;
   
+  console.log(`🔄 React Proxy request: ${config.method} ${cleanEndpoint}`);
+  
+  const response = await fetch(proxyEndpoint, config);
+  
+  // Handle auth errors
   if (response.status === 401) {
+    console.log('🔑 Unauthorized - clearing token');
     localStorage.removeItem('authToken');
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
     window.location.href = '/login.html';
     return;
   }
@@ -32,18 +51,18 @@ const authFetch = async (endpoint, options = {}) => {
   return response;
 };
 
-// API Functions
+// 🛡️ UPDATED API Functions - Now use PHP Proxy
 const API = {
-  // FIXED: Handle new alerts response format
+  // FIXED: Handle new alerts response format with proxy
   getAlerts: async (type = 'ALL', page = 1, limit = 50) => {
     try {
-      const response = await authFetch(`/alerts?type=${type}&page=${page}&limit=${limit}`);
+      const response = await proxyFetch(`/alerts?type=${type}&page=${page}&limit=${limit}`);
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
       }
       
       const data = await response.json();
-      console.log('🚨 Alerts API response:', data);
+      console.log('🚨 Alerts API response via proxy:', data);
       
       // Handle both old and new response formats
       if (Array.isArray(data)) {
@@ -61,7 +80,7 @@ const API = {
         };
       }
     } catch (error) {
-      console.error('❌ Error fetching alerts:', error);
+      console.error('❌ Error fetching alerts via proxy:', error);
       return {
         alerts: [],
         pagination: { page: 1, limit: 0, total: 0, hasMore: false }
@@ -70,33 +89,71 @@ const API = {
   },
 
   getProfile: async () => {
-    const response = await authFetch('/auth/profile');
-    return response.json();
+    try {
+      const response = await proxyFetch('/auth/profile');
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      return await response.json();
+    } catch (error) {
+      console.error('❌ Error fetching profile via proxy:', error);
+      throw error;
+    }
   },
 
   getUserProfile: async () => {
-    const response = await authFetch('/users/profile');
-    return response.json();
+    try {
+      const response = await proxyFetch('/users/profile');
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      return await response.json();
+    } catch (error) {
+      console.error('❌ Error fetching user profile via proxy:', error);
+      throw error;
+    }
   },
 
   getActiveUsers: async () => {
     try {
-      const response = await authFetch('/users/active');
+      const response = await proxyFetch('/users/active');
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
       }
       
       const data = await response.json();
-      return Array.isArray(data) ? data : [];
+      console.log('👥 Active users via proxy:', data);
+      
+      // Handle different response formats
+      if (Array.isArray(data)) {
+        return data;
+      } else if (data && Array.isArray(data.users)) {
+        return data.users;
+      } else if (data && data.data && Array.isArray(data.data)) {
+        return data.data;
+      } else {
+        console.warn('⚠️ Invalid users response:', data);
+        return [];
+      }
     } catch (error) {
-      console.error('❌ Error fetching active users:', error);
+      console.error('❌ Error fetching active users via proxy:', error);
       return [];
     }
   },
 
   getMarketData: async () => {
-    const response = await authFetch('/market/data');
-    return response.json();
+    try {
+      const response = await proxyFetch('/market/data');
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      const data = await response.json();
+      console.log('📈 Market data via proxy:', data);
+      return data || {};
+    } catch (error) {
+      console.error('❌ Error fetching market data via proxy:', error);
+      return {};
+    }
   }
 };
 
@@ -125,16 +182,16 @@ const Dashboard = () => {
   const [error, setError] = useState(null);
   const [lastUpdate, setLastUpdate] = useState(new Date());
 
-  // FIXED: Fetch alerts with proper error handling
+  // FIXED: Fetch alerts with proper error handling via proxy
   const fetchAlerts = useCallback(async (type = 'ALL', page = 1) => {
     try {
       setAlertsLoading(true);
       setError(null);
       
-      console.log('📡 Fetching alerts:', { type, page });
+      console.log('📡 Fetching alerts via proxy:', { type, page });
       
       const response = await API.getAlerts(type, page, 50);
-      console.log('✅ Alerts fetched:', response);
+      console.log('✅ Alerts fetched via proxy:', response);
       
       // CRITICAL: Always ensure alerts is an array
       const alertsArray = Array.isArray(response.alerts) ? response.alerts : [];
@@ -143,8 +200,8 @@ const Dashboard = () => {
       setAlertsPagination(response.pagination);
       
     } catch (error) {
-      console.error('❌ Error fetching alerts:', error);
-      setError('Failed to load alerts');
+      console.error('❌ Error fetching alerts via proxy:', error);
+      setError('Failed to load alerts via proxy');
       setAlerts([]); // Always set to empty array on error
       setAlertsPagination(null);
     } finally {
@@ -152,7 +209,7 @@ const Dashboard = () => {
     }
   }, []);
 
-  // Fetch active users
+  // Fetch active users via proxy
   const fetchActiveUsers = useCallback(async () => {
     try {
       setUsersLoading(true);
@@ -161,23 +218,25 @@ const Dashboard = () => {
       // CRITICAL: Always ensure users is an array
       const usersArray = Array.isArray(users) ? users : [];
       setActiveUsers(usersArray);
+      console.log('✅ Active users loaded via proxy:', usersArray.length);
       
     } catch (error) {
-      console.error('❌ Error fetching active users:', error);
+      console.error('❌ Error fetching active users via proxy:', error);
       setActiveUsers([]);
     } finally {
       setUsersLoading(false);
     }
   }, []);
 
-  // Fetch market data
+  // Fetch market data via proxy
   const fetchMarketData = useCallback(async () => {
     try {
       setMarketLoading(true);
       const data = await API.getMarketData();
       setMarketData(data || {});
+      console.log('✅ Market data loaded via proxy');
     } catch (error) {
-      console.error('❌ Error fetching market data:', error);
+      console.error('❌ Error fetching market data via proxy:', error);
       setMarketData({});
     } finally {
       setMarketLoading(false);
@@ -187,7 +246,7 @@ const Dashboard = () => {
   // Auto-refresh data periodically
   const startPolling = useCallback(() => {
     const interval = setInterval(() => {
-      console.log('🔄 Auto-refreshing data...');
+      console.log('🔄 Auto-refreshing data via proxy...');
       fetchAlerts(selectedAlertType);
       fetchActiveUsers();
       fetchMarketData();
@@ -197,16 +256,9 @@ const Dashboard = () => {
     return interval;
   }, [fetchAlerts, fetchActiveUsers, fetchMarketData, selectedAlertType]);
 
-  // Optional: Simple WebSocket alternative (no external library needed)
-  const startWebSocketConnection = useCallback(() => {
-    // This is optional since polling works perfectly
-    // Only add if you want real-time updates faster than 30 seconds
-    return null;
-  }, []);
-
   // Initialize data on component mount
   useEffect(() => {
-    console.log('🚀 Dashboard initializing...');
+    console.log('🚀 React Dashboard initializing with PHP Proxy...');
     
     fetchAlerts(selectedAlertType);
     fetchActiveUsers();
@@ -243,6 +295,29 @@ const Dashboard = () => {
     });
   }, [alerts, selectedAlertType]);
 
+  // Test connection function for debugging
+  const testProxyConnection = useCallback(async () => {
+    try {
+      console.log('🧪 Testing PHP proxy connection from React...');
+      const response = await proxyFetch('/test');
+      if (response.ok) {
+        const data = await response.json();
+        console.log('✅ Proxy test successful:', data);
+        alert('✅ PHP Proxy is working from React component!');
+      } else {
+        throw new Error(`HTTP ${response.status}`);
+      }
+    } catch (error) {
+      console.error('❌ Proxy test failed:', error);
+      alert('❌ Proxy test failed: ' + error.message);
+    }
+  }, []);
+
+  // Make test function available globally
+  useEffect(() => {
+    window.testReactProxy = testProxyConnection;
+  }, [testProxyConnection]);
+
   // Render loading state
   if (alertsLoading && usersLoading && marketLoading) {
     return (
@@ -250,7 +325,10 @@ const Dashboard = () => {
         <div className="loading-screen">
           <div className="spinner">⏳</div>
           <h2>Loading Dashboard...</h2>
-          <p>Fetching your trading data...</p>
+          <p>Fetching your trading data via PHP Proxy...</p>
+          <button onClick={testProxyConnection} style={{marginTop: '16px', padding: '8px 16px'}}>
+            🧪 Test Proxy Connection
+          </button>
         </div>
       </div>
     );
@@ -265,7 +343,7 @@ const Dashboard = () => {
           <h1>RTi Trading Dashboard</h1>
           <div className="last-update">
             <span className="status-indicator">🔄</span>
-            Last updated: {lastUpdate.toLocaleTimeString()}
+            Last updated: {lastUpdate.toLocaleTimeString()} (via PHP Proxy)
           </div>
         </div>
         <div className="header-right">
@@ -291,13 +369,25 @@ const Dashboard = () => {
         </div>
       )}
 
+      {/* Debug Panel */}
+      <div className="debug-panel">
+        <button onClick={testProxyConnection} className="test-button">
+          🧪 Test PHP Proxy
+        </button>
+        <span className="debug-info">
+          🛡️ Using PHP Proxy | 🔄 Auto-refresh: 30s | 
+          Alerts: {Array.isArray(alerts) ? alerts.length : 'Invalid'} | 
+          Users: {Array.isArray(activeUsers) ? activeUsers.length : 'Invalid'}
+        </span>
+      </div>
+
       {/* Main Content */}
       <div className="dashboard-content">
         {/* Market Data Section */}
         <section className="market-section">
           <h2>Market Overview</h2>
           {marketLoading ? (
-            <div className="loading-state">Loading market data...</div>
+            <div className="loading-state">Loading market data via proxy...</div>
           ) : (
             <div className="market-grid">
               {Object.entries(marketData).length === 0 ? (
@@ -350,18 +440,18 @@ const Dashboard = () => {
           </div>
 
           {/* Debug Info */}
-          <div className="debug-info">
+          <div className="debug-info-section">
             <small>
               🐛 Alerts: {typeof alerts} | Array: {Array.isArray(alerts) ? 'Yes' : 'No'} | 
               Count: {Array.isArray(alerts) ? alerts.length : 'N/A'} | 
               Filtered: {filteredAlerts.length} | 
-              🔄 Auto-refresh: 30s intervals
+              🔄 Auto-refresh: 30s intervals | 🛡️ Via PHP Proxy
             </small>
           </div>
 
           {/* Alerts Content */}
           {alertsLoading ? (
-            <div className="loading-state">Loading alerts...</div>
+            <div className="loading-state">Loading alerts via proxy...</div>
           ) : filteredAlerts.length === 0 ? (
             <div className="no-alerts">
               <div className="empty-icon">📭</div>
@@ -424,7 +514,7 @@ const Dashboard = () => {
         <section className="users-section">
           <h2>Active Traders</h2>
           {usersLoading ? (
-            <div className="loading-state">Loading active users...</div>
+            <div className="loading-state">Loading active users via proxy...</div>
           ) : (
             <div className="users-grid">
               {Array.isArray(activeUsers) && activeUsers.length > 0 ? (
@@ -570,6 +660,36 @@ const Dashboard = () => {
           font-size: 16px;
         }
 
+        .debug-panel {
+          background: #f8f9fa;
+          padding: 12px 20px;
+          border-bottom: 1px solid #ddd;
+          display: flex;
+          align-items: center;
+          gap: 16px;
+          flex-wrap: wrap;
+        }
+
+        .test-button {
+          padding: 6px 12px;
+          background: #28a745;
+          color: white;
+          border: none;
+          border-radius: 4px;
+          cursor: pointer;
+          font-size: 12px;
+        }
+
+        .test-button:hover {
+          background: #218838;
+        }
+
+        .debug-info {
+          font-family: monospace;
+          font-size: 12px;
+          color: #666;
+        }
+
         .dashboard-content {
           padding: 20px;
           max-width: 1200px;
@@ -623,7 +743,7 @@ const Dashboard = () => {
           background: #0056b3;
         }
 
-        .debug-info {
+        .debug-info-section {
           background: #f8f9fa;
           padding: 8px;
           border-radius: 4px;
@@ -813,6 +933,11 @@ const Dashboard = () => {
 
           .alert-filter {
             width: 100%;
+          }
+
+          .debug-panel {
+            flex-direction: column;
+            align-items: flex-start;
           }
         }
       `}</style>
