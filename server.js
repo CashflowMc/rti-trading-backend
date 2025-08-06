@@ -1,948 +1,554 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+// 📁 FILE: server.js (Railway Backend)
+// ✅ CLEAN NODE.JS SERVER - NO HTML/JSX ALLOWED
 
-// 🛡️ PHP PROXY CONFIGURATION - BYPASSES CORS
-const PROXY_URL = 'https://cashflowops.pro/api-proxy.php';
+import express from 'express';
+import cors from 'cors';
+import jwt from 'jsonwebtoken';
+import bcrypt from 'bcryptjs';
+import { fileURLToPath } from 'url';
+import { dirname } from 'path';
 
-const getAuthToken = () => localStorage.getItem('authToken') || localStorage.getItem('token');
+// ES6 module setup
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
-// 🔧 FIXED: PHP Proxy fetch function instead of direct Railway calls
-const proxyFetch = async (endpoint, options = {}) => {
-  const token = getAuthToken();
-  
-  // Clean endpoint (remove leading /api if present)
-  const cleanEndpoint = endpoint.replace(/^\/api\//, '').replace(/^\//, '');
-  
-  const defaultHeaders = {
-    'Content-Type': 'application/json',
-    'Authorization': token ? `Bearer ${token}` : ''
-  };
+const app = express();
+const PORT = process.env.PORT || 3000;
 
-  // Handle FormData - don't set Content-Type for FormData
-  if (options.body instanceof FormData) {
-    delete defaultHeaders['Content-Type'];
-  }
+// JWT Secret
+const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-in-production';
 
-  const config = {
-    method: 'GET',
-    ...options,
-    headers: {
-      ...defaultHeaders,
-      ...options.headers
+// CORS Configuration
+app.use(cors({
+    origin: [
+        'https://cashflowops.pro',
+        'http://localhost:3000',
+        'http://localhost:8080',
+        'http://127.0.0.1:3000'
+    ],
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
+// Middleware
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// Request logging
+app.use((req, res, next) => {
+    console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
+    next();
+});
+
+// ===== MOCK DATABASE =====
+// In production, replace with real database (MongoDB, PostgreSQL, etc.)
+let users = [
+    {
+        id: 1,
+        username: 'admin',
+        email: 'admin@example.com',
+        password: '$2a$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', // password: password
+        tier: 'ADMIN',
+        isAdmin: true,
+        avatar: 'https://ui-avatars.com/api/?background=dc2626&color=fff&name=Admin',
+        createdAt: new Date(),
+        lastActive: new Date()
+    },
+    {
+        id: 2,
+        username: 'testuser',
+        email: 'test@example.com',
+        password: '$2a$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', // password: password
+        tier: 'MONTHLY',
+        isAdmin: false,
+        avatar: 'https://ui-avatars.com/api/?background=22c55e&color=fff&name=Test',
+        createdAt: new Date(),
+        lastActive: new Date()
     }
-  };
+];
 
-  // Build proxy URL
-  const proxyEndpoint = `${PROXY_URL}?endpoint=${encodeURIComponent(cleanEndpoint)}`;
-  
-  console.log(`🔄 React Proxy request: ${config.method} ${cleanEndpoint}`);
-  
-  const response = await fetch(proxyEndpoint, config);
-  
-  // Handle auth errors
-  if (response.status === 401) {
-    console.log('🔑 Unauthorized - clearing token');
-    localStorage.removeItem('authToken');
-    localStorage.removeItem('token');
-    localStorage.removeItem('user');
-    window.location.href = '/login.html';
-    return;
-  }
-  
-  return response;
+let alerts = [
+    {
+        _id: '1',
+        title: 'BTC Breaking Resistance',
+        message: 'Bitcoin is approaching major resistance at $45,000. Watch for breakout confirmation.',
+        type: 'BOT_SIGNAL',
+        priority: 'HIGH',
+        botName: 'TrendBot Pro',
+        pnl: '+$2,450',
+        createdAt: new Date(Date.now() - 1000 * 60 * 15), // 15 minutes ago
+    },
+    {
+        _id: '2', 
+        title: 'Market Update',
+        message: 'US markets showing strong bullish momentum ahead of Fed meeting.',
+        type: 'MARKET_UPDATE',
+        priority: 'MEDIUM',
+        createdAt: new Date(Date.now() - 1000 * 60 * 30), // 30 minutes ago
+    },
+    {
+        _id: '3',
+        title: 'ETH Signal Alert', 
+        message: 'Ethereum forming ascending triangle pattern. Entry point: $2,100',
+        type: 'BOT_SIGNAL',
+        priority: 'HIGH',
+        botName: 'Pattern Scanner',
+        pnl: '+$1,200',
+        createdAt: new Date(Date.now() - 1000 * 60 * 45), // 45 minutes ago
+    }
+];
+
+let marketData = {
+    BTC: {
+        price: 43250.00,
+        change: 1250.50,
+        changePercent: 2.98
+    },
+    ETH: {
+        price: 2089.75,
+        change: -45.25,
+        changePercent: -2.12
+    },
+    SPY: {
+        price: 445.20,
+        change: 3.80,
+        changePercent: 0.86
+    },
+    QQQ: {
+        price: 378.90,
+        change: -2.10,
+        changePercent: -0.55
+    }
 };
 
-// 🛡️ UPDATED API Functions - Now use PHP Proxy
-const API = {
-  // FIXED: Handle new alerts response format with proxy
-  getAlerts: async (type = 'ALL', page = 1, limit = 50) => {
-    try {
-      const response = await proxyFetch(`/alerts?type=${type}&page=${page}&limit=${limit}`);
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-      
-      const data = await response.json();
-      console.log('🚨 Alerts API response via proxy:', data);
-      
-      // Handle both old and new response formats
-      if (Array.isArray(data)) {
-        return {
-          alerts: data,
-          pagination: { page: 1, limit: data.length, total: data.length, hasMore: false }
-        };
-      } else if (data && Array.isArray(data.alerts)) {
-        return data;
-      } else {
-        console.warn('⚠️ Invalid alerts response:', data);
-        return {
-          alerts: [],
-          pagination: { page: 1, limit: 0, total: 0, hasMore: false }
-        };
-      }
-    } catch (error) {
-      console.error('❌ Error fetching alerts via proxy:', error);
-      return {
-        alerts: [],
-        pagination: { page: 1, limit: 0, total: 0, hasMore: false }
-      };
+// ===== MIDDLEWARE =====
+
+// JWT Authentication middleware
+const authenticateToken = (req, res, next) => {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
+
+    if (!token) {
+        return res.status(401).json({ error: 'Access token required' });
     }
-  },
 
-  getProfile: async () => {
-    try {
-      const response = await proxyFetch('/auth/profile');
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-      return await response.json();
-    } catch (error) {
-      console.error('❌ Error fetching profile via proxy:', error);
-      throw error;
-    }
-  },
-
-  getUserProfile: async () => {
-    try {
-      const response = await proxyFetch('/users/profile');
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-      return await response.json();
-    } catch (error) {
-      console.error('❌ Error fetching user profile via proxy:', error);
-      throw error;
-    }
-  },
-
-  getActiveUsers: async () => {
-    try {
-      const response = await proxyFetch('/users/active');
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-      
-      const data = await response.json();
-      console.log('👥 Active users via proxy:', data);
-      
-      // Handle different response formats
-      if (Array.isArray(data)) {
-        return data;
-      } else if (data && Array.isArray(data.users)) {
-        return data.users;
-      } else if (data && data.data && Array.isArray(data.data)) {
-        return data.data;
-      } else {
-        console.warn('⚠️ Invalid users response:', data);
-        return [];
-      }
-    } catch (error) {
-      console.error('❌ Error fetching active users via proxy:', error);
-      return [];
-    }
-  },
-
-  getMarketData: async () => {
-    try {
-      const response = await proxyFetch('/market/data');
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-      const data = await response.json();
-      console.log('📈 Market data via proxy:', data);
-      return data || {};
-    } catch (error) {
-      console.error('❌ Error fetching market data via proxy:', error);
-      return {};
-    }
-  }
-};
-
-// Main Dashboard Component
-const Dashboard = () => {
-  // State management
-  const [user, setUser] = useState(() => {
-    try {
-      return JSON.parse(localStorage.getItem('user') || '{}');
-    } catch {
-      return {};
-    }
-  });
-  
-  const [alerts, setAlerts] = useState([]);
-  const [alertsLoading, setAlertsLoading] = useState(true);
-  const [alertsPagination, setAlertsPagination] = useState(null);
-  const [selectedAlertType, setSelectedAlertType] = useState('ALL');
-  
-  const [activeUsers, setActiveUsers] = useState([]);
-  const [usersLoading, setUsersLoading] = useState(true);
-  
-  const [marketData, setMarketData] = useState({});
-  const [marketLoading, setMarketLoading] = useState(true);
-  
-  const [error, setError] = useState(null);
-  const [lastUpdate, setLastUpdate] = useState(new Date());
-
-  // FIXED: Fetch alerts with proper error handling via proxy
-  const fetchAlerts = useCallback(async (type = 'ALL', page = 1) => {
-    try {
-      setAlertsLoading(true);
-      setError(null);
-      
-      console.log('📡 Fetching alerts via proxy:', { type, page });
-      
-      const response = await API.getAlerts(type, page, 50);
-      console.log('✅ Alerts fetched via proxy:', response);
-      
-      // CRITICAL: Always ensure alerts is an array
-      const alertsArray = Array.isArray(response.alerts) ? response.alerts : [];
-      
-      setAlerts(alertsArray);
-      setAlertsPagination(response.pagination);
-      
-    } catch (error) {
-      console.error('❌ Error fetching alerts via proxy:', error);
-      setError('Failed to load alerts via proxy');
-      setAlerts([]); // Always set to empty array on error
-      setAlertsPagination(null);
-    } finally {
-      setAlertsLoading(false);
-    }
-  }, []);
-
-  // Fetch active users via proxy
-  const fetchActiveUsers = useCallback(async () => {
-    try {
-      setUsersLoading(true);
-      const users = await API.getActiveUsers();
-      
-      // CRITICAL: Always ensure users is an array
-      const usersArray = Array.isArray(users) ? users : [];
-      setActiveUsers(usersArray);
-      console.log('✅ Active users loaded via proxy:', usersArray.length);
-      
-    } catch (error) {
-      console.error('❌ Error fetching active users via proxy:', error);
-      setActiveUsers([]);
-    } finally {
-      setUsersLoading(false);
-    }
-  }, []);
-
-  // Fetch market data via proxy
-  const fetchMarketData = useCallback(async () => {
-    try {
-      setMarketLoading(true);
-      const data = await API.getMarketData();
-      setMarketData(data || {});
-      console.log('✅ Market data loaded via proxy');
-    } catch (error) {
-      console.error('❌ Error fetching market data via proxy:', error);
-      setMarketData({});
-    } finally {
-      setMarketLoading(false);
-    }
-  }, []);
-
-  // Auto-refresh data periodically
-  const startPolling = useCallback(() => {
-    const interval = setInterval(() => {
-      console.log('🔄 Auto-refreshing data via proxy...');
-      fetchAlerts(selectedAlertType);
-      fetchActiveUsers();
-      fetchMarketData();
-      setLastUpdate(new Date());
-    }, 30000); // Refresh every 30 seconds
-
-    return interval;
-  }, [fetchAlerts, fetchActiveUsers, fetchMarketData, selectedAlertType]);
-
-  // Initialize data on component mount
-  useEffect(() => {
-    console.log('🚀 React Dashboard initializing with PHP Proxy...');
-    
-    fetchAlerts(selectedAlertType);
-    fetchActiveUsers();
-    fetchMarketData();
-    
-    // Start auto-refresh polling
-    const pollInterval = startPolling();
-    
-    // Cleanup
-    return () => {
-      if (pollInterval) {
-        clearInterval(pollInterval);
-      }
-    };
-  }, [fetchAlerts, fetchActiveUsers, fetchMarketData, startPolling, selectedAlertType]);
-
-  // Fetch alerts when type changes
-  useEffect(() => {
-    fetchAlerts(selectedAlertType);
-  }, [fetchAlerts, selectedAlertType]);
-
-  // FIXED: Safe filtering with array check
-  const filteredAlerts = useMemo(() => {
-    if (!Array.isArray(alerts)) {
-      console.warn('⚠️ Alerts is not an array:', typeof alerts, alerts);
-      return [];
-    }
-    
-    return alerts.filter(alert => {
-      if (!alert || typeof alert !== 'object') return false;
-      
-      if (selectedAlertType === 'ALL') return true;
-      return alert.type === selectedAlertType;
+    jwt.verify(token, JWT_SECRET, (err, user) => {
+        if (err) {
+            return res.status(403).json({ error: 'Invalid or expired token' });
+        }
+        req.user = user;
+        next();
     });
-  }, [alerts, selectedAlertType]);
-
-  // Test connection function for debugging
-  const testProxyConnection = useCallback(async () => {
-    try {
-      console.log('🧪 Testing PHP proxy connection from React...');
-      const response = await proxyFetch('/test');
-      if (response.ok) {
-        const data = await response.json();
-        console.log('✅ Proxy test successful:', data);
-        alert('✅ PHP Proxy is working from React component!');
-      } else {
-        throw new Error(`HTTP ${response.status}`);
-      }
-    } catch (error) {
-      console.error('❌ Proxy test failed:', error);
-      alert('❌ Proxy test failed: ' + error.message);
-    }
-  }, []);
-
-  // Make test function available globally
-  useEffect(() => {
-    window.testReactProxy = testProxyConnection;
-  }, [testProxyConnection]);
-
-  // Render loading state
-  if (alertsLoading && usersLoading && marketLoading) {
-    return (
-      <div className="dashboard-container">
-        <div className="loading-screen">
-          <div className="spinner">⏳</div>
-          <h2>Loading Dashboard...</h2>
-          <p>Fetching your trading data via PHP Proxy...</p>
-          <button onClick={testProxyConnection} style={{marginTop: '16px', padding: '8px 16px'}}>
-            🧪 Test Proxy Connection
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  // Render main dashboard
-  return (
-    <div className="dashboard-container">
-      {/* Header */}
-      <header className="dashboard-header">
-        <div className="header-left">
-          <h1>RTi Trading Dashboard</h1>
-          <div className="last-update">
-            <span className="status-indicator">🔄</span>
-            Last updated: {lastUpdate.toLocaleTimeString()} (via PHP Proxy)
-          </div>
-        </div>
-        <div className="header-right">
-          <div className="user-info">
-            <img 
-              src={user.avatar || 'https://ui-avatars.com/api/?background=22c55e&color=fff&name=User'} 
-              alt="Avatar" 
-              className="user-avatar"
-            />
-            <span className="username">{user.username || 'User'}</span>
-            <span className={`user-tier ${user.tier?.toLowerCase() || 'free'}`}>
-              {user.tier || 'FREE'}
-            </span>
-          </div>
-        </div>
-      </header>
-
-      {/* Error Banner */}
-      {error && (
-        <div className="error-banner">
-          <span>❌ {error}</span>
-          <button onClick={() => setError(null)}>✕</button>
-        </div>
-      )}
-
-      {/* Debug Panel */}
-      <div className="debug-panel">
-        <button onClick={testProxyConnection} className="test-button">
-          🧪 Test PHP Proxy
-        </button>
-        <span className="debug-info">
-          🛡️ Using PHP Proxy | 🔄 Auto-refresh: 30s | 
-          Alerts: {Array.isArray(alerts) ? alerts.length : 'Invalid'} | 
-          Users: {Array.isArray(activeUsers) ? activeUsers.length : 'Invalid'}
-        </span>
-      </div>
-
-      {/* Main Content */}
-      <div className="dashboard-content">
-        {/* Market Data Section */}
-        <section className="market-section">
-          <h2>Market Overview</h2>
-          {marketLoading ? (
-            <div className="loading-state">Loading market data via proxy...</div>
-          ) : (
-            <div className="market-grid">
-              {Object.entries(marketData).length === 0 ? (
-                <div className="no-data">No market data available</div>
-              ) : (
-                Object.entries(marketData).map(([symbol, data]) => (
-                  <div key={symbol} className="market-card">
-                    <h3>{symbol}</h3>
-                    <div className="price">${data.price?.toFixed(2)}</div>
-                    <div className={`change ${data.change >= 0 ? 'positive' : 'negative'}`}>
-                      {data.change >= 0 ? '+' : ''}{data.change?.toFixed(2)} 
-                      ({data.changePercent?.toFixed(2)}%)
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-          )}
-        </section>
-
-        {/* Alerts Section */}
-        <section className="alerts-section">
-          <div className="section-header">
-            <h2>Trading Alerts</h2>
-            <div className="alerts-controls">
-              <select 
-                value={selectedAlertType} 
-                onChange={(e) => setSelectedAlertType(e.target.value)}
-                className="alert-filter"
-              >
-                <option value="ALL">All Alerts</option>
-                <option value="NEWS">News</option>
-                <option value="BOT_SIGNAL">Bot Signals</option>
-                <option value="MARKET_UPDATE">Market Updates</option>
-                <option value="ANNOUNCEMENT">Announcements</option>
-              </select>
-              <button 
-                onClick={() => {
-                  fetchAlerts(selectedAlertType);
-                  fetchActiveUsers();
-                  fetchMarketData();
-                  setLastUpdate(new Date());
-                }} 
-                className="refresh-button"
-                title="Manual refresh (auto-refresh every 30s)"
-              >
-                🔄 Refresh All
-              </button>
-            </div>
-          </div>
-
-          {/* Debug Info */}
-          <div className="debug-info-section">
-            <small>
-              🐛 Alerts: {typeof alerts} | Array: {Array.isArray(alerts) ? 'Yes' : 'No'} | 
-              Count: {Array.isArray(alerts) ? alerts.length : 'N/A'} | 
-              Filtered: {filteredAlerts.length} | 
-              🔄 Auto-refresh: 30s intervals | 🛡️ Via PHP Proxy
-            </small>
-          </div>
-
-          {/* Alerts Content */}
-          {alertsLoading ? (
-            <div className="loading-state">Loading alerts via proxy...</div>
-          ) : filteredAlerts.length === 0 ? (
-            <div className="no-alerts">
-              <div className="empty-icon">📭</div>
-              <h3>No alerts available</h3>
-              <p>Check back later for trading signals and updates.</p>
-            </div>
-          ) : (
-            <div className="alerts-list">
-              {filteredAlerts.map((alert, index) => {
-                if (!alert || typeof alert !== 'object') {
-                  return null;
-                }
-
-                return (
-                  <div key={alert._id || alert.id || `alert-${index}`} className="alert-card">
-                    <div className="alert-header">
-                      <span className={`alert-type ${(alert.type || 'unknown').toLowerCase()}`}>
-                        {alert.type || 'UNKNOWN'}
-                      </span>
-                      <span className={`alert-priority ${(alert.priority || 'medium').toLowerCase()}`}>
-                        {alert.priority || 'MEDIUM'}
-                      </span>
-                      <span className="alert-time">
-                        {alert.createdAt ? new Date(alert.createdAt).toLocaleString() : 'Unknown time'}
-                      </span>
-                    </div>
-                    
-                    <h4 className="alert-title">{alert.title || 'No title'}</h4>
-                    <p className="alert-message">{alert.message || 'No message'}</p>
-                    
-                    {alert.botName && (
-                      <div className="alert-meta">
-                        <span className="bot-name">🤖 {alert.botName}</span>
-                      </div>
-                    )}
-                    
-                    {alert.pnl && (
-                      <div className="alert-pnl">
-                        <span className="pnl">💰 P&L: {alert.pnl}</span>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-
-          {/* Load More Button */}
-          {alertsPagination?.hasMore && (
-            <button 
-              className="load-more-button"
-              onClick={() => fetchAlerts(selectedAlertType, alertsPagination.page + 1)}
-            >
-              Load More Alerts
-            </button>
-          )}
-        </section>
-
-        {/* Active Users Section */}
-        <section className="users-section">
-          <h2>Active Traders</h2>
-          {usersLoading ? (
-            <div className="loading-state">Loading active users via proxy...</div>
-          ) : (
-            <div className="users-grid">
-              {Array.isArray(activeUsers) && activeUsers.length > 0 ? (
-                activeUsers.map((activeUser, index) => (
-                  <div key={activeUser._id || activeUser.id || `user-${index}`} className="user-card">
-                    <img 
-                      src={activeUser.avatar || 'https://ui-avatars.com/api/?background=22c55e&color=fff&name=User'} 
-                      alt={`${activeUser.username}'s avatar`}
-                      className="user-avatar-small"
-                    />
-                    <div className="user-details">
-                      <div className="username">{activeUser.username}</div>
-                      <div className={`tier ${activeUser.tier?.toLowerCase() || 'free'}`}>
-                        {activeUser.tier || 'FREE'}
-                      </div>
-                      <div className="last-active">
-                        {activeUser.lastActive ? 
-                          `Active ${new Date(activeUser.lastActive).toLocaleTimeString()}` : 
-                          'Recently active'
-                        }
-                      </div>
-                    </div>
-                  </div>
-                ))
-              ) : (
-                <div className="no-users">No active traders found</div>
-              )}
-            </div>
-          )}
-        </section>
-      </div>
-
-      {/* Styles */}
-      <style jsx>{`
-        .dashboard-container {
-          min-height: 100vh;
-          background: #f5f5f5;
-          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
-        }
-
-        .loading-screen {
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          justify-content: center;
-          height: 100vh;
-          text-align: center;
-        }
-
-        .spinner {
-          font-size: 48px;
-          margin-bottom: 20px;
-          animation: spin 2s linear infinite;
-        }
-
-        @keyframes spin {
-          0% { transform: rotate(0deg); }
-          100% { transform: rotate(360deg); }
-        }
-
-        .dashboard-header {
-          background: white;
-          padding: 20px;
-          border-bottom: 1px solid #ddd;
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-
-        .header-left h1 {
-          margin: 0 0 5px 0;
-          color: #333;
-        }
-
-        .last-update {
-          font-size: 14px;
-          color: #666;
-          display: flex;
-          align-items: center;
-          gap: 5px;
-        }
-
-        .status-indicator {
-          font-size: 12px;
-        }
-
-        .header-right .user-info {
-          display: flex;
-          align-items: center;
-          gap: 10px;
-        }
-
-        .user-avatar {
-          width: 40px;
-          height: 40px;
-          border-radius: 50%;
-          border: 2px solid #ddd;
-        }
-
-        .username {
-          font-weight: bold;
-          color: #333;
-        }
-
-        .user-tier {
-          padding: 4px 8px;
-          border-radius: 4px;
-          font-size: 12px;
-          font-weight: bold;
-          text-transform: uppercase;
-        }
-
-        .user-tier.free {
-          background: #f5f5f5;
-          color: #666;
-        }
-
-        .user-tier.weekly, .user-tier.monthly {
-          background: #e3f2fd;
-          color: #1976d2;
-        }
-
-        .user-tier.admin {
-          background: #ffebee;
-          color: #d32f2f;
-        }
-
-        .error-banner {
-          background: #ffebee;
-          color: #d32f2f;
-          padding: 10px 20px;
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-        }
-
-        .error-banner button {
-          background: none;
-          border: none;
-          color: #d32f2f;
-          cursor: pointer;
-          font-size: 16px;
-        }
-
-        .debug-panel {
-          background: #f8f9fa;
-          padding: 12px 20px;
-          border-bottom: 1px solid #ddd;
-          display: flex;
-          align-items: center;
-          gap: 16px;
-          flex-wrap: wrap;
-        }
-
-        .test-button {
-          padding: 6px 12px;
-          background: #28a745;
-          color: white;
-          border: none;
-          border-radius: 4px;
-          cursor: pointer;
-          font-size: 12px;
-        }
-
-        .test-button:hover {
-          background: #218838;
-        }
-
-        .debug-info {
-          font-family: monospace;
-          font-size: 12px;
-          color: #666;
-        }
-
-        .dashboard-content {
-          padding: 20px;
-          max-width: 1200px;
-          margin: 0 auto;
-        }
-
-        .market-section, .alerts-section, .users-section {
-          background: white;
-          border-radius: 8px;
-          padding: 24px;
-          margin-bottom: 24px;
-          box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-        }
-
-        .section-header {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          margin-bottom: 20px;
-        }
-
-        .section-header h2 {
-          margin: 0;
-          color: #333;
-        }
-
-        .alerts-controls {
-          display: flex;
-          gap: 10px;
-          align-items: center;
-        }
-
-        .alert-filter {
-          padding: 8px 12px;
-          border: 1px solid #ddd;
-          border-radius: 4px;
-          background: white;
-        }
-
-        .refresh-button, .load-more-button {
-          padding: 8px 16px;
-          background: #007bff;
-          color: white;
-          border: none;
-          border-radius: 4px;
-          cursor: pointer;
-          font-size: 14px;
-        }
-
-        .refresh-button:hover, .load-more-button:hover {
-          background: #0056b3;
-        }
-
-        .debug-info-section {
-          background: #f8f9fa;
-          padding: 8px;
-          border-radius: 4px;
-          margin-bottom: 16px;
-          font-family: monospace;
-          color: #666;
-        }
-
-        .loading-state, .no-alerts, .no-users, .no-data {
-          text-align: center;
-          padding: 40px 20px;
-          color: #666;
-        }
-
-        .empty-icon {
-          font-size: 48px;
-          margin-bottom: 16px;
-        }
-
-        .market-grid {
-          display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-          gap: 16px;
-        }
-
-        .market-card {
-          border: 1px solid #ddd;
-          border-radius: 8px;
-          padding: 16px;
-          text-align: center;
-        }
-
-        .market-card h3 {
-          margin: 0 0 8px 0;
-          color: #333;
-        }
-
-        .price {
-          font-size: 24px;
-          font-weight: bold;
-          margin-bottom: 8px;
-          color: #333;
-        }
-
-        .change.positive {
-          color: #22c55e;
-        }
-
-        .change.negative {
-          color: #ef4444;
-        }
-
-        .alerts-list {
-          display: flex;
-          flex-direction: column;
-          gap: 16px;
-        }
-
-        .alert-card {
-          border: 1px solid #ddd;
-          border-radius: 8px;
-          padding: 16px;
-          background: #fafafa;
-        }
-
-        .alert-header {
-          display: flex;
-          gap: 10px;
-          margin-bottom: 12px;
-          flex-wrap: wrap;
-        }
-
-        .alert-type, .alert-priority {
-          padding: 4px 8px;
-          border-radius: 4px;
-          font-size: 11px;
-          font-weight: bold;
-          text-transform: uppercase;
-        }
-
-        .alert-type {
-          background: #e3f2fd;
-          color: #1976d2;
-        }
-
-        .alert-priority {
-          background: #fff3e0;
-          color: #f57c00;
-        }
-
-        .alert-priority.high {
-          background: #ffebee;
-          color: #d32f2f;
-        }
-
-        .alert-time {
-          font-size: 12px;
-          color: #666;
-          margin-left: auto;
-        }
-
-        .alert-title {
-          margin: 0 0 8px 0;
-          color: #333;
-          font-size: 16px;
-        }
-
-        .alert-message {
-          color: #666;
-          line-height: 1.5;
-          margin-bottom: 12px;
-        }
-
-        .alert-meta, .alert-pnl {
-          font-size: 12px;
-          color: #666;
-        }
-
-        .users-grid {
-          display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-          gap: 16px;
-        }
-
-        .user-card {
-          border: 1px solid #ddd;
-          border-radius: 8px;
-          padding: 16px;
-          display: flex;
-          align-items: center;
-          gap: 12px;
-        }
-
-        .user-avatar-small {
-          width: 48px;
-          height: 48px;
-          border-radius: 50%;
-          border: 2px solid #ddd;
-        }
-
-        .user-details .username {
-          font-weight: bold;
-          margin-bottom: 4px;
-        }
-
-        .user-details .tier {
-          font-size: 12px;
-          margin-bottom: 4px;
-        }
-
-        .user-details .tier.free {
-          color: #666;
-        }
-
-        .user-details .tier.weekly, .user-details .tier.monthly {
-          color: #1976d2;
-        }
-
-        .last-active {
-          font-size: 11px;
-          color: #999;
-        }
-
-        .load-more-button {
-          width: 100%;
-          margin-top: 16px;
-          padding: 12px;
-        }
-
-        @media (max-width: 768px) {
-          .dashboard-header {
-            flex-direction: column;
-            gap: 16px;
-            text-align: center;
-          }
-
-          .section-header {
-            flex-direction: column;
-            gap: 16px;
-            text-align: center;
-          }
-
-          .alerts-controls {
-            flex-direction: column;
-            width: 100%;
-          }
-
-          .alert-filter {
-            width: 100%;
-          }
-
-          .debug-panel {
-            flex-direction: column;
-            align-items: flex-start;
-          }
-        }
-      `}</style>
-    </div>
-  );
 };
 
-export default Dashboard;
+// Admin middleware
+const requireAdmin = (req, res, next) => {
+    if (!req.user.isAdmin) {
+        return res.status(403).json({ error: 'Admin access required' });
+    }
+    next();
+};
+
+// ===== API ROUTES =====
+
+// Health check
+app.get('/api/test', (req, res) => {
+    res.json({
+        message: 'RTi Trading Backend is running!',
+        timestamp: new Date().toISOString(),
+        server: 'Railway Production',
+        status: 'healthy'
+    });
+});
+
+// CORS test endpoint
+app.get('/api/cors-test', (req, res) => {
+    res.json({
+        message: 'CORS is working!',
+        origin: req.headers.origin,
+        timestamp: new Date().toISOString()
+    });
+});
+
+// ===== AUTH ROUTES =====
+
+// Register
+app.post('/api/auth/register', async (req, res) => {
+    try {
+        const { username, email, password } = req.body;
+
+        if (!username || !email || !password) {
+            return res.status(400).json({ error: 'Username, email, and password are required' });
+        }
+
+        // Check if user exists
+        const existingUser = users.find(u => u.email === email || u.username === username);
+        if (existingUser) {
+            return res.status(409).json({ error: 'User already exists' });
+        }
+
+        // Hash password
+        const hashedPassword = await bcrypt.hash(password, 10);
+
+        // Create new user
+        const newUser = {
+            id: users.length + 1,
+            username,
+            email,
+            password: hashedPassword,
+            tier: 'FREE',
+            isAdmin: false,
+            avatar: `https://ui-avatars.com/api/?background=22c55e&color=fff&name=${encodeURIComponent(username)}`,
+            createdAt: new Date(),
+            lastActive: new Date()
+        };
+
+        users.push(newUser);
+
+        // Generate token
+        const token = jwt.sign(
+            { 
+                id: newUser.id, 
+                username: newUser.username, 
+                email: newUser.email,
+                isAdmin: newUser.isAdmin,
+                tier: newUser.tier
+            },
+            JWT_SECRET,
+            { expiresIn: '24h' }
+        );
+
+        // Return user data (without password)
+        const { password: _, ...userWithoutPassword } = newUser;
+        
+        res.status(201).json({
+            token,
+            user: userWithoutPassword,
+            message: 'User registered successfully'
+        });
+
+    } catch (error) {
+        console.error('Registration error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+// Login
+app.post('/api/auth/login', async (req, res) => {
+    try {
+        const { email, username, password } = req.body;
+
+        if (!password) {
+            return res.status(400).json({ error: 'Password is required' });
+        }
+
+        if (!email && !username) {
+            return res.status(400).json({ error: 'Email or username is required' });
+        }
+
+        // Find user
+        const user = users.find(u => 
+            u.email === email || u.username === username || u.email === username
+        );
+
+        if (!user) {
+            return res.status(401).json({ error: 'Invalid credentials' });
+        }
+
+        // Check password
+        const validPassword = await bcrypt.compare(password, user.password);
+        if (!validPassword) {
+            return res.status(401).json({ error: 'Invalid credentials' });
+        }
+
+        // Update last active
+        user.lastActive = new Date();
+
+        // Generate token
+        const token = jwt.sign(
+            { 
+                id: user.id, 
+                username: user.username, 
+                email: user.email,
+                isAdmin: user.isAdmin,
+                tier: user.tier
+            },
+            JWT_SECRET,
+            { expiresIn: '24h' }
+        );
+
+        // Return user data (without password)
+        const { password: _, ...userWithoutPassword } = user;
+        
+        res.json({
+            token,
+            user: userWithoutPassword,
+            message: 'Login successful'
+        });
+
+    } catch (error) {
+        console.error('Login error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+// Get user profile
+app.get('/api/auth/profile', authenticateToken, (req, res) => {
+    try {
+        const user = users.find(u => u.id === req.user.id);
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        const { password: _, ...userWithoutPassword } = user;
+        res.json(userWithoutPassword);
+
+    } catch (error) {
+        console.error('Profile error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+// ===== ALERTS ROUTES =====
+
+// Get alerts
+app.get('/api/alerts', authenticateToken, (req, res) => {
+    try {
+        const { type = 'ALL', page = 1, limit = 50 } = req.query;
+        
+        let filteredAlerts = alerts;
+        
+        if (type !== 'ALL') {
+            filteredAlerts = alerts.filter(alert => alert.type === type);
+        }
+
+        // Sort by creation date (newest first)
+        filteredAlerts.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+        // Pagination
+        const startIndex = (parseInt(page) - 1) * parseInt(limit);
+        const endIndex = startIndex + parseInt(limit);
+        const paginatedAlerts = filteredAlerts.slice(startIndex, endIndex);
+
+        res.json({
+            alerts: paginatedAlerts,
+            pagination: {
+                page: parseInt(page),
+                limit: parseInt(limit),
+                total: filteredAlerts.length,
+                hasMore: endIndex < filteredAlerts.length
+            }
+        });
+
+    } catch (error) {
+        console.error('Get alerts error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+// Create alert (admin only)
+app.post('/api/alerts', authenticateToken, requireAdmin, (req, res) => {
+    try {
+        const { title, message, type, priority, botName, pnl } = req.body;
+
+        if (!title || !message) {
+            return res.status(400).json({ error: 'Title and message are required' });
+        }
+
+        const newAlert = {
+            _id: (alerts.length + 1).toString(),
+            title,
+            message,
+            type: type || 'NEWS',
+            priority: priority || 'MEDIUM',
+            botName: botName || null,
+            pnl: pnl || null,
+            createdAt: new Date()
+        };
+
+        alerts.unshift(newAlert);
+
+        res.status(201).json({
+            alert: newAlert,
+            message: 'Alert created successfully'
+        });
+
+    } catch (error) {
+        console.error('Create alert error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+// Delete alert (admin only)
+app.delete('/api/alerts/:id', authenticateToken, requireAdmin, (req, res) => {
+    try {
+        const { id } = req.params;
+        
+        const alertIndex = alerts.findIndex(alert => alert._id === id);
+        if (alertIndex === -1) {
+            return res.status(404).json({ error: 'Alert not found' });
+        }
+
+        alerts.splice(alertIndex, 1);
+        
+        res.json({ message: 'Alert deleted successfully' });
+
+    } catch (error) {
+        console.error('Delete alert error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+// ===== USER ROUTES =====
+
+// Get active users
+app.get('/api/users/active', authenticateToken, (req, res) => {
+    try {
+        // Return users who were active in the last 24 hours
+        const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+        const activeUsers = users
+            .filter(user => new Date(user.lastActive) > oneDayAgo)
+            .map(user => ({
+                id: user.id,
+                username: user.username,
+                tier: user.tier,
+                avatar: user.avatar,
+                lastActive: user.lastActive
+            }));
+
+        res.json(activeUsers);
+
+    } catch (error) {
+        console.error('Get active users error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+// ===== MARKET DATA ROUTES =====
+
+// Get market data
+app.get('/api/market/data', authenticateToken, (req, res) => {
+    try {
+        // Add some random fluctuation to simulate live data
+        const updatedMarketData = { ...marketData };
+        
+        Object.keys(updatedMarketData).forEach(symbol => {
+            const randomChange = (Math.random() - 0.5) * 10; // Random change between -5 and +5
+            const currentPrice = updatedMarketData[symbol].price;
+            const newPrice = currentPrice + randomChange;
+            const change = newPrice - currentPrice;
+            const changePercent = (change / currentPrice) * 100;
+            
+            updatedMarketData[symbol] = {
+                price: parseFloat(newPrice.toFixed(2)),
+                change: parseFloat(change.toFixed(2)),
+                changePercent: parseFloat(changePercent.toFixed(2))
+            };
+        });
+
+        marketData = updatedMarketData;
+        res.json(marketData);
+
+    } catch (error) {
+        console.error('Get market data error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+// ===== SUBSCRIPTION ROUTES =====
+
+// Get subscription plans
+app.get('/api/subscription/plans', (req, res) => {
+    const plans = [
+        {
+            id: 'weekly',
+            name: 'Weekly Access',
+            price: 29.99,
+            interval: 'week',
+            features: [
+                'Full trading group access',
+                'Live alerts & signals',
+                'Market analysis',
+                'Direct trader support'
+            ]
+        },
+        {
+            id: 'monthly', 
+            name: 'Monthly Access',
+            price: 99.99,
+            interval: 'month',
+            popular: true,
+            features: [
+                'Full trading group access',
+                'Live alerts & signals', 
+                'Market analysis',
+                'Direct trader support',
+                'Exclusive webinars',
+                'Priority support'
+            ]
+        }
+    ];
+
+    res.json(plans);
+});
+
+// Create checkout session (mock)
+app.post('/api/subscription/create-checkout-session', authenticateToken, (req, res) => {
+    try {
+        const { priceId } = req.body;
+        
+        // Mock Stripe checkout session
+        const sessionId = 'cs_' + Math.random().toString(36).substr(2, 9);
+        
+        res.json({
+            sessionId,
+            url: `https://checkout.stripe.com/pay/${sessionId}`,
+            message: 'Checkout session created successfully'
+        });
+
+    } catch (error) {
+        console.error('Create checkout session error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+// ===== ERROR HANDLING =====
+
+// 404 handler
+app.use('*', (req, res) => {
+    res.status(404).json({ 
+        error: 'Route not found',
+        path: req.originalUrl,
+        method: req.method
+    });
+});
+
+// Global error handler
+app.use((err, req, res, next) => {
+    console.error('Unhandled error:', err);
+    res.status(500).json({ 
+        error: 'Internal server error',
+        message: process.env.NODE_ENV === 'development' ? err.message : undefined
+    });
+});
+
+// ===== SERVER STARTUP =====
+
+app.listen(PORT, () => {
+    console.log(`🚀 RTi Trading Backend running on port ${PORT}`);
+    console.log(`📊 Environment: ${process.env.NODE_ENV || 'development'}`);
+    console.log(`🔗 Health check: http://localhost:${PORT}/api/test`);
+    console.log(`👥 Mock users available: admin/password, testuser/password`);
+});
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+    console.log('SIGTERM received. Shutting down gracefully...');
+    process.exit(0);
+});
+
+process.on('SIGINT', () => {
+    console.log('SIGINT received. Shutting down gracefully...');
+    process.exit(0);
+});
