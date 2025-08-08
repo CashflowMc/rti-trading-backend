@@ -7,14 +7,14 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { Server } from 'socket.io';
 
-// ✅ Fix __dirname for ES modules
+// __dirname workaround for ESM
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
 const server = http.createServer(app);
 
-// ✅ Allow only your domain
+// Allowed CORS origin
 const allowedOrigins = ['https://cashflowops.pro'];
 
 app.use(cors({
@@ -32,7 +32,7 @@ app.use(cors({
 app.use(express.json());
 app.use('/avatars', express.static(path.join(__dirname, 'avatars')));
 
-// ✅ Setup Socket.IO with CORS
+// Socket.IO setup
 const io = new Server(server, {
   cors: {
     origin: allowedOrigins,
@@ -41,12 +41,13 @@ const io = new Server(server, {
   }
 });
 
-// 👤 Dummy users
+// ✅ Hardcoded users
 const users = [
-  { id: 1, username: 'testuser', password: 'password123', isAdmin: false, avatar: '' }
+  { id: 1, username: 'testuser', password: 'password123', isAdmin: false, avatar: '' },
+  { id: 2, username: 'admin', password: 'admin123', isAdmin: true, avatar: '' }
 ];
 
-// 🔔 Alerts array
+// 🔔 Alert store
 const alerts = [];
 
 const JWT_SECRET = 'supersecret';
@@ -75,12 +76,12 @@ app.post('/api/auth/login', (req, res) => {
   res.json({ token, user });
 });
 
-// 📥 Get Alerts (auth required)
+// 📥 Get alerts
 app.get('/api/alerts', authMiddleware, (req, res) => {
   res.json(alerts);
 });
 
-// 📤 Post Alert
+// 📤 Post alert
 app.post('/api/alerts', (req, res) => {
   const alert = {
     title: req.body.title,
@@ -92,7 +93,7 @@ app.post('/api/alerts', (req, res) => {
   res.json({ success: true });
 });
 
-// 📝 Update Profile
+// 📝 Update profile
 app.put('/api/users/:id', authMiddleware, (req, res) => {
   const user = users.find(u => u.id === parseInt(req.params.id));
   if (!user) return res.status(404).json({ error: 'User not found' });
@@ -101,7 +102,7 @@ app.put('/api/users/:id', authMiddleware, (req, res) => {
   res.json({ success: true });
 });
 
-// 🖼 Avatar Upload
+// 🖼 Upload avatar
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, './avatars'),
   filename: (req, file, cb) => {
@@ -118,6 +119,6 @@ app.post('/api/users/:id/avatar', authMiddleware, upload.single('avatar'), (req,
   res.json({ avatarUrl: user.avatar });
 });
 
-// 🚀 Start Server
+// ✅ Start server
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => console.log(`✅ Server running on port ${PORT}`));
