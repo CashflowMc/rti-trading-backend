@@ -8,18 +8,36 @@ const { Server } = require('socket.io');
 
 const app = express();
 const server = http.createServer(app);
+
+// ✅ Allowed origin for CORS
+const allowedOrigins = ['https://cashflowops.pro'];
+
+// ✅ Apply proper CORS settings for Express
+app.use(cors({
+  origin: function (origin, callback) {
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  methods: ['GET', 'POST', 'PUT'],
+  credentials: true,
+}));
+
+app.use(express.json());
+app.use('/avatars', express.static(path.join(__dirname, 'avatars')));
+
+// ✅ Set up Socket.IO with the same CORS origin
 const io = new Server(server, {
   cors: {
-    origin: ['https://cashflowops.pro'], // Update if needed
+    origin: allowedOrigins,
     methods: ['GET', 'POST', 'PUT'],
     credentials: true
   }
 });
 
-app.use(cors());
-app.use(express.json());
-app.use('/avatars', express.static(path.join(__dirname, 'avatars')));
-
+// 🔒 Dummy users and alerts
 const users = [
   { id: 1, username: 'testuser', password: 'password123', isAdmin: false, avatar: '' }
 ];
@@ -41,7 +59,7 @@ function authMiddleware(req, res, next) {
   }
 }
 
-// 🔐 Login
+// 🔐 Login Route
 app.post('/api/auth/login', (req, res) => {
   const { username, password } = req.body;
   const user = users.find(u => u.username === username && u.password === password);
@@ -51,12 +69,12 @@ app.post('/api/auth/login', (req, res) => {
   res.json({ token, user });
 });
 
-// 🟢 Get Alerts
+// 📢 Get Alerts (Auth required)
 app.get('/api/alerts', authMiddleware, (req, res) => {
   res.json(alerts);
 });
 
-// 🟢 Post Alert (from system)
+// 📢 Post New Alert (public)
 app.post('/api/alerts', (req, res) => {
   const alert = {
     title: req.body.title,
@@ -68,16 +86,17 @@ app.post('/api/alerts', (req, res) => {
   res.json({ success: true });
 });
 
-// 🟢 Update Profile
+// 🧑‍🎓 Update User Profile (Auth required)
 app.put('/api/users/:id', authMiddleware, (req, res) => {
   const user = users.find(u => u.id === parseInt(req.params.id));
   if (!user) return res.status(404).json({ error: 'User not found' });
+
   user.username = req.body.username;
   user.isAdmin = req.body.isAdmin;
   res.json({ success: true });
 });
 
-// 🟢 Upload Avatar
+// 🖼 Upload Avatar (Auth required)
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, './avatars'),
   filename: (req, file, cb) => {
@@ -90,9 +109,11 @@ const upload = multer({ storage });
 app.post('/api/users/:id/avatar', authMiddleware, upload.single('avatar'), (req, res) => {
   const user = users.find(u => u.id === parseInt(req.params.id));
   if (!user) return res.status(404).json({ error: 'User not found' });
+
   user.avatar = `/avatars/${req.file.filename}`;
   res.json({ avatarUrl: user.avatar });
 });
 
+// ✅ Start Server
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => console.log(`✅ Server running on port ${PORT}`));
