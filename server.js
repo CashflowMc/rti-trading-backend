@@ -1,18 +1,22 @@
-const express = require('express');
-const cors = require('cors');
-const http = require('http');
-const jwt = require('jsonwebtoken');
-const multer = require('multer');
-const path = require('path');
-const { Server } = require('socket.io');
+import express from 'express';
+import cors from 'cors';
+import http from 'http';
+import jwt from 'jsonwebtoken';
+import multer from 'multer';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { Server } from 'socket.io';
+
+// ✅ Fix __dirname for ES modules
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 const server = http.createServer(app);
 
-// ✅ Allowed origin for production
+// ✅ Allow only your domain
 const allowedOrigins = ['https://cashflowops.pro'];
 
-// ✅ Proper CORS config
 app.use(cors({
   origin: function (origin, callback) {
     if (!origin || allowedOrigins.includes(origin)) {
@@ -28,7 +32,7 @@ app.use(cors({
 app.use(express.json());
 app.use('/avatars', express.static(path.join(__dirname, 'avatars')));
 
-// ✅ Socket.IO with CORS
+// ✅ Setup Socket.IO with CORS
 const io = new Server(server, {
   cors: {
     origin: allowedOrigins,
@@ -37,15 +41,17 @@ const io = new Server(server, {
   }
 });
 
-// 👤 User & Alert dummy data
+// 👤 Dummy users
 const users = [
   { id: 1, username: 'testuser', password: 'password123', isAdmin: false, avatar: '' }
 ];
+
+// 🔔 Alerts array
 const alerts = [];
 
 const JWT_SECRET = 'supersecret';
 
-// 🔐 Auth Middleware
+// 🔐 Auth middleware
 function authMiddleware(req, res, next) {
   const authHeader = req.headers.authorization;
   if (!authHeader) return res.sendStatus(401);
@@ -59,7 +65,7 @@ function authMiddleware(req, res, next) {
   }
 }
 
-// 🔐 Login route
+// 🔑 Login
 app.post('/api/auth/login', (req, res) => {
   const { username, password } = req.body;
   const user = users.find(u => u.username === username && u.password === password);
@@ -69,12 +75,12 @@ app.post('/api/auth/login', (req, res) => {
   res.json({ token, user });
 });
 
-// 🟢 Get alerts (auth required)
+// 📥 Get Alerts (auth required)
 app.get('/api/alerts', authMiddleware, (req, res) => {
   res.json(alerts);
 });
 
-// 🟢 Post alert (public)
+// 📤 Post Alert
 app.post('/api/alerts', (req, res) => {
   const alert = {
     title: req.body.title,
@@ -86,7 +92,7 @@ app.post('/api/alerts', (req, res) => {
   res.json({ success: true });
 });
 
-// 🟢 Update profile (auth required)
+// 📝 Update Profile
 app.put('/api/users/:id', authMiddleware, (req, res) => {
   const user = users.find(u => u.id === parseInt(req.params.id));
   if (!user) return res.status(404).json({ error: 'User not found' });
@@ -95,7 +101,7 @@ app.put('/api/users/:id', authMiddleware, (req, res) => {
   res.json({ success: true });
 });
 
-// 🖼 Upload avatar
+// 🖼 Avatar Upload
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, './avatars'),
   filename: (req, file, cb) => {
@@ -112,6 +118,6 @@ app.post('/api/users/:id/avatar', authMiddleware, upload.single('avatar'), (req,
   res.json({ avatarUrl: user.avatar });
 });
 
-// ✅ Start server
+// 🚀 Start Server
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => console.log(`✅ Server running on port ${PORT}`));
