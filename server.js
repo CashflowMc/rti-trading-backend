@@ -495,7 +495,23 @@ app.delete('/api/profile/picture', (req, res) => {
   });
 });
 
-// Get public user profile (for viewing other users)
+// --- Data Endpoints ---
+
+// Active users list (SPECIFIC route - must come FIRST)
+app.get('/api/users/active', (_req, res) => {
+  const activeUsers = users
+    .filter(u => u.isActive)
+    .map(u => ({
+      _id: u.id,
+      username: u.username,
+      email: u.email,
+      isActive: u.isActive
+    }));
+  
+  res.json(activeUsers);
+});
+
+// Get public user profile (PARAMETERIZED route - comes AFTER)
 app.get('/api/users/:userId', (req, res) => {
   const { userId } = req.params;
   const user = users.find(u => u.id === userId);
@@ -519,22 +535,6 @@ app.get('/api/users/:userId', (req, res) => {
   };
 
   res.json({ user: publicProfile });
-});
-
-// --- Data Endpoints ---
-
-// Active users list
-app.get('/api/users/active', (_req, res) => {
-  const activeUsers = users
-    .filter(u => u.isActive)
-    .map(u => ({
-      _id: u.id,
-      username: u.username,
-      email: u.email,
-      isActive: u.isActive
-    }));
-  
-  res.json(activeUsers);
 });
 
 // Get alerts
