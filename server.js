@@ -3,6 +3,7 @@ import cors from 'cors';
 import http from 'http';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
+import { Server } from 'socket.io';
 
 const app = express();
 const server = http.createServer(app);
@@ -27,6 +28,51 @@ app.options('*', cors());
 // --- Body parsing middleware ---
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// --- Socket.io Setup ---
+const io = new Server(server, {
+  cors: {
+    origin: '*',
+    methods: ['GET', 'POST'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    credentials: true
+  },
+  transports: ['polling', 'websocket']
+});
+
+// Socket.io connection handling
+io.on('connection', (socket) => {
+  console.log('🔌 User connected:', socket.id);
+  
+  // Join user to a room (optional, for user-specific notifications)
+  socket.on('join-user', (userId) => {
+    socket.join(`user-${userId}`);
+    console.log(`User ${userId} joined room user-${userId}`);
+  });
+  
+  // Handle real-time alerts
+  socket.on('new-alert', (alertData) => {
+    console.log('📢 Broadcasting new alert:', alertData);
+    io.emit('alert-update', alertData);
+  });
+  
+  // Handle trading updates
+  socket.on('price-update', (priceData) => {
+    io.emit('price-change', priceData);
+  });
+  
+  // Handle user status updates
+  socket.on('user-status', (statusData) => {
+    io.emit('user-status-change', statusData);
+  });
+  
+  socket.on('disconnect', () => {
+    console.log('🔌 User disconnected:', socket.id);
+  });
+});
+
+// Make io available to routes (optional, for emitting from API endpoints)
+app.set('socketio', io);
 
 // --- In-memory demo data (replace with database in production) ---
 let users = [
@@ -110,9 +156,12 @@ app.get('/healthz', (_req, res) => res.status(200).send('ok'));
 
 // Root endpoint
 app.get('/', (req, res) => {
+  const io = req.app.get('socketio');
   res.json({ 
     message: '✅ RTi Backend is running in ES module mode',
     timestamp: new Date().toISOString(),
+    socketEnabled: !!io,
+    connectedClients: io ? io.engine.clientsCount : 0,
     routes: [
       'GET /healthz',
       'POST /api/auth/login', 
@@ -120,7 +169,10 @@ app.get('/', (req, res) => {
       'GET /api/auth/profile',
       'GET /api/users/active',
       'GET /api/alerts',
-      'POST /api/alerts'
+      'POST /api/alerts',
+      'DELETE /api/alerts/:id',
+      'POST /api/test-socket',
+      'GET /api/socket/status'
     ]
   });
 });
@@ -282,6 +334,16 @@ app.post('/api/alerts', (req, res) => {
   
   alerts.push(newAlert);
   
+  // Emit real-time alert to all connected clients
+  const io = req.app.get('socketio');
+  if (io) {
+    io.emit('alert-update', {
+      type: 'new-alert',
+      alert: newAlert
+    });
+    console.log('📢 Real-time alert broadcasted:', newAlert.symbol);
+  }
+  
   res.status(201).json({
     alert: newAlert,
     message: 'Alert created successfully'
@@ -298,9 +360,55 @@ app.delete('/api/alerts/:id', (req, res) => {
   }
   
   const deletedAlert = alerts.splice(alertIndex, 1)[0];
+  
+  // Emit real-time update for alert deletion
+  const io = req.app.get('socketio');
+  if (io) {
+    io.emit('alert-update', {
+      type: 'alert-deleted',
+      alertId: id,
+      alert: deletedAlert
+    });
+    console.log('📢 Alert deletion broadcasted:', id);
+  }
+  
   res.json({ 
     message: 'Alert deleted successfully', 
     alert: deletedAlert 
+  });
+});
+
+// Test socket endpoint
+app.post('/api/test-socket', (req, res) => {
+  const { message, data } = req.body || {};
+  const io = req.app.get('socketio');
+  
+  if (!io) {
+    return res.status(500).json({ error: 'Socket.io not available' });
+  }
+  
+  // Broadcast test message
+  io.emit('test-message', {
+    message: message || 'Test message from server',
+    data: data || { timestamp: new Date().toISOString() },
+    serverTime: new Date().toISOString()
+  });
+  
+  res.json({
+    success: true,
+    message: 'Test message broadcasted',
+    connectedClients: io.engine.clientsCount
+  });
+});
+
+// Socket status endpoint
+app.get('/api/socket/status', (req, res) => {
+  const io = req.app.get('socketio');
+  
+  res.json({
+    socketEnabled: !!io,
+    connectedClients: io ? io.engine.clientsCount : 0,
+    serverTime: new Date().toISOString()
   });
 });
 
@@ -325,8 +433,9 @@ app.use('*', (req, res) => {
 // --- Start Server ---
 server.listen(PORT, () => {
   console.log(`🚀 RTi Backend Server running on port ${PORT}`);
+  console.log(`🔌 Socket.io enabled with CORS support`);
   console.log(`📋 Available routes:`);
-  console.log(`   GET  /                    - Server info`);
+  console.log(`   GET  /                    - Server info & status`);
   console.log(`   GET  /healthz             - Health check`);
   console.log(`   POST /api/auth/login      - User login`);
   console.log(`   POST /api/auth/register   - User registration`);
@@ -335,4 +444,7 @@ server.listen(PORT, () => {
   console.log(`   GET  /api/alerts          - Get alerts`);
   console.log(`   POST /api/alerts          - Create alert`);
   console.log(`   DELETE /api/alerts/:id    - Delete alert`);
+  console.log(`   POST /api/test-socket     - Test socket broadcast`);
+  console.log(`   GET  /api/socket/status   - Socket connection status`);
+  console.log(`🌐 Socket.io events: connection, new-alert, price-update, user-status`);
 });
